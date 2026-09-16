@@ -319,3 +319,4 @@ ThermoCell-AI is built in 12 structured phases that systematically transition fr
 - **Acceptance Criteria**: Synthetic source and hardware ingest emit identical Pydantic models; firmware compiles cleanly in PlatformIO.
 - **Testing Requirements**: Mock packet ingestion test verifying `POST /api/telemetry/ingest` triggers downstream ML inference.
 - **What Must NOT Be Implemented Yet**: No physical circuit production required for software milestone completion.
+

@@ -40,3 +40,4 @@
 1. **No PostgreSQL**: Adding a relational database adds Docker or local service management burdens for team members on Windows/Mac. Preprocessed NASA cycles and synthetic batch runs are stored as structured JSON/CSV in `backend/data/`.
 2. **Headless OpenCV vs SciPy**: `opencv-python-headless` avoids unnecessary GUI dependencies on servers or CI while delivering optimized 2D interpolation and convolution for the 8×8 thermal array.
 3. **Pydantic Validation with Strict Provenance Tags**: Every API schema requires an enum field `provenance: "REAL" | "SYNTHETIC" | "PREDICTED"`.
+

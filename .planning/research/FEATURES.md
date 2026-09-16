@@ -43,3 +43,4 @@ A 10-second controlled constant-current discharge pulse (e.g., 2C or 3A–5A loa
 2. **Logistic Regression (Multinomial)**: Calibrated baseline with feature importance interpretable via odds ratios.
 3. **Random Forest Classifier**: Non-linear tree ensemble; robust against multicollinearity between electrical drop and thermal rise.
 4. **Gradient Boosting (XGBoost / LightGBM / HistGradientBoostingClassifier)**: High-performance gradient booster for tabular classification.
+

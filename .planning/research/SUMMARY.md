@@ -28,3 +28,4 @@ ThermoCell-AI demonstrates a rapid (10-second) diagnostic system for second-life
 - **Phases 4–6**: Thermal Lumped Model, 8×8 Synthetic Matrix, Feature Extraction Pipeline
 - **Phases 7–9**: ML Training/Calibration, FastAPI Diagnostic Service, React Dashboard
 - **Phases 10–12**: Live Simulation / Playback, System Testing & Validation, AMG8833 Hardware Spec & Telemetry Ingest
+

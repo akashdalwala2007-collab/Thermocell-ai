@@ -151,3 +151,4 @@ thermocell-ai/
    - `SyntheticPulseSource`: Runs the physics-informed 10-second ECM and 8×8 thermal frame generator.
    - `HardwareSerialSource`: Reads live JSON frames sent by an ESP32 micro-controller over USB Serial or HTTP POST.
    Both sources emit the exact same `BatteryPulseTelemetry` Pydantic model. This completely isolates the UI and ML layers from hardware changes.
+

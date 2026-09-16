@@ -40,3 +40,4 @@
 - **Avoid PostgreSQL or Docker requirements for local development**: Rely on versioned CSV/JSON fixtures in `backend/data/` so any team member can run `uvicorn` and `npm run dev` instantly without database setup.
 - **Avoid Microservices**: Keep backend as a clean, single FastAPI service and frontend as a single Vite SPA.
 - **Avoid Premature Hardware Lock-in**: Build the abstract `TelemetrySource` pattern first. If hardware fails on hackathon day (e.g. burnt sensor, loose breadboard wire), the demo continues seamlessly using the synthetic pulse simulator.
+
