@@ -12,8 +12,6 @@ Rapid (10-second), physics-grounded second-life battery classification (REUSE / 
 
 All feature extraction, machine learning models, FastAPI endpoints, and UI dashboard cards adhere to ONE canonical ordered 14-feature schema:
 
-1. **`OCV`**: Open-circuit voltage measured from the explicit pre-pulse voltage sample `v_pre_pulse` immediately prior to load application at $t = 0.0\,\text{s}$ ($I = 0\,\text{A}$) ($\text{V}$).
-2. **`DCIR`**: Direct current internal resistance derived from immediate ohmic drop $\Delta V_0$ between `v_pre_pulse` and active-pulse sample $V(t = 0.1\,\text{s})$ under 3A load: $\text{DCIR} = \Delta V_0 / I_{\text{pulse}}$ ($\Omega$).
 1. **`OCV`**: Open-circuit voltage measured from the explicit unloaded pre-pulse voltage sample `v_pre_pulse` immediately prior to load application ($I = 0\,\text{A}$) ($\text{V}$).
 2. **`DCIR`**: Direct current internal resistance derived from immediate ohmic drop $\Delta V_0$ between unloaded pre-pulse baseline `v_pre_pulse` ($I = 0\,\text{A}$) and first post-load active-pulse sample $V(t = 0.0\,\text{s})$ under 3A load: $\text{DCIR} = \Delta V_0 / I_{\text{pulse}} = R_0$ ($\Omega$).
 3. **`ΔV10`**: Total voltage drop over the 10-second active pulse at final sample $t = 9.9\,\text{s}$: $\Delta V_{10} = v_{\text{pre\_pulse}} - V(t = 9.9\,\text{s})$ ($\text{V}$).

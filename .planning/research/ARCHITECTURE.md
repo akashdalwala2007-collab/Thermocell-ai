@@ -327,6 +327,7 @@ To support physical hardware integration (ESP32 + AMG8833 + INA219) without rewr
      - Stale idle frames where $t_{\text{trigger}} - t_{\text{frame}} > 0.5\,\text{s}$ are automatically discarded from baseline evaluation.
      - Once `ACTIVE_PULSE` is triggered at $t_{\text{trigger}}$, `v_pre_pulse` is frozen and immutable; no subsequent frame may overwrite it.
      - The active pulse time vector is then referenced relative to pulse onset, yielding the canonical $[0.0, 9.9]\,\text{s}$ active pulse timestamps.
+     - **Baseline Failure Path**: If BOTH the explicit `PRE_PULSE_BASELINE` packet/state and the validated low-current fallback frame ($I < 0.05\,\text{A}$) within $t_{\text{frame}} \in [t_{\text{trigger}} - 0.2\,\text{s}, t_{\text{trigger}})$ are absent or fail validation, pulse acquisition MUST be immediately aborted and rejected. `TelemetryBufferService` MUST NOT emit a `BatteryPulseTelemetry` payload with a missing `v_pre_pulse`, MUST NOT substitute an arbitrary frame, and MUST NOT use stale idle history older than 0.5s.
      - This measurement is preserved as an explicit scalar field in `BatteryPulseTelemetry`, completely separate from the active pulse time-series arrays.
 
 2. **`ACTIVE_PULSE` (Loaded Discharge State)**:

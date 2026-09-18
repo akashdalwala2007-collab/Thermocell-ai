@@ -90,8 +90,11 @@ ThermoCell-AI is built in 12 structured phases that systematically transition fr
   - `backend/data/synthetic/`
 - **Dependencies**: NumPy, SciPy.
 - **Inputs**: Preprocessed NASA cell degradation parameters (capacity, estimated DCIR per cycle).
-- **Outputs**: Synthetic 10s voltage and current time-series arrays for each cycle state.
-- **Outputs**: Synthetic pulse telemetry payload containing unloaded pre-pulse baseline `v_pre_pulse` (scalar float, $I = 0\,\text{A}$), 100 active pulse samples ($[0.0, 9.9]\,\text{s}$, $I = 3.0\,\text{A}$), and 20 post-pulse relaxation samples ($[10.0, 11.9]\,\text{s}$, $I = 0\,\text{A}$) with `provenance: "SYNTHETIC"`.
+- **Outputs**: `BatteryPulseTelemetry` payload containing:
+  - `v_pre_pulse`: Scalar unloaded baseline voltage in $\text{V}$ ($I = 0\,\text{A}$) captured before active pulse.
+  - Active pulse: 100 synchronized samples at 10Hz covering timestamps $[0.0, 9.9]\,\text{s}$ ($t_i = \text{round}(0.1 \cdot i, 1)$) with discharge current fixed at $3.0\,\text{A}$, voltage in $\text{V}$, and bulk temperature in $^\circ\text{C}$ supporting `T_initial`, `ΔT_bulk`, and `dT/dt_max`.
+  - Relaxation (`RelaxationTelemetry`): 20 synchronized samples at 10Hz covering timestamps $[10.0, 11.9]\,\text{s}$ ($t_i = \text{round}(10.0 + 0.1 \cdot i, 1)$) with voltage in $\text{V}$, bulk temperature in $^\circ\text{C}$, and current $0\,\text{A}$ ($2.0\,\text{s}$ duration).
+  - All signals tagged strictly with `provenance: "SYNTHETIC"`.
 - **Acceptance Criteria**: High-SoH cells show immediate ohmic drop $\Delta V_0 \le 0.35\,\text{V}$ and total pulse drop $\Delta V_{10} \le 0.45\,\text{V}$; degraded cells show pronounced ohmic drop $\Delta V_0 > 0.60\,\text{V}$ ($\Delta V_{10} > 0.75\,\text{V}$).
 - **Testing Requirements**: Unit tests for Ohm's Law consistency, monotonicity of voltage drop with resistance, and time vector integrity (100 points, 0.1s step).
 - **What Must NOT Be Implemented Yet**: No spatial thermal matrices, no ML training.
@@ -140,7 +143,6 @@ ThermoCell-AI is built in 12 structured phases that systematically transition fr
 - **Dependencies**: NumPy, OpenCV (headless) or SciPy `ndimage`.
 - **Inputs**: 10-second bulk temperature profile $T(t)$ from Phase 4.
 - **Outputs**: 100 8×8 thermal matrices per simulated pulse, serialized to JSON/NumPy.
-- **Acceptance Criteria**: Mean of 8×8 active cell frame matches bulk temperature; tab pixel cluster is hottest; pixel values quantized to 0.25°C steps.
 - **Acceptance Criteria**: For every frame $k \in [0, 99]$, the active-cell pixel mean matches $T_{\text{bulk}}(t_k)$ within $\pm 0.25^\circ\text{C}$ (per-frame sensor quantization limit); tab pixel cluster is hottest; pixel values quantized to 0.25°C steps.
 - **Testing Requirements**: Matrix dimension checks ($8 \times 8 \times 100$), non-negative spatial gradient checks, noise distribution verification.
 - **What Must NOT Be Implemented Yet**: No ML training, no frontend integration.
@@ -164,9 +166,11 @@ ThermoCell-AI is built in 12 structured phases that systematically transition fr
   - `ml/features/electrical_features.py`, `ml/features/thermal_features.py`, `ml/features/pipeline.py`
   - `backend/app/services/feature_service.py`
 - **Dependencies**: pandas, NumPy, scikit-learn.
-- **Inputs**: Synthetic 10s pulse electrical arrays, relaxation observations, and 8×8 thermal frame sequences.
-- **Outputs**: Master feature matrix with physical `cell_id`, `cycle_index`, provenance tags, and ground-truth triage labels.
-- **Inputs**: Synthetic pulse telemetry payload containing unloaded pre-pulse baseline `v_pre_pulse` (scalar float, $I = 0\,\text{A}$), 100 active pulse samples ($[0.0, 9.9]\,\text{s}$, $I = 3.0\,\text{A}$), 20 post-pulse relaxation samples ($[10.0, 11.9]\,\text{s}$, $I = 0\,\text{A}$), and 100 8×8 spatial thermal frames from Phase 5.
+- **Inputs**: Complete `BatteryPulseTelemetry` payload containing:
+  - `v_pre_pulse`: Scalar unloaded baseline voltage in $\text{V}$ ($I = 0\,\text{A}$) captured before active pulse.
+  - Active pulse: 100 synchronized samples at 10Hz covering timestamps $[0.0, 9.9]\,\text{s}$ ($t_i = \text{round}(0.1 \cdot i, 1)$) with discharge current fixed at $3.0\,\text{A}$, voltage in $\text{V}$, and bulk temperature in $^\circ\text{C}$ supporting `T_initial`, `ΔT_bulk`, and `dT/dt_max`.
+  - Relaxation (`RelaxationTelemetry`): 20 synchronized samples at 10Hz covering timestamps $[10.0, 11.9]\,\text{s}$ ($t_i = \text{round}(10.0 + 0.1 \cdot i, 1)$) with voltage in $\text{V}$, bulk temperature in $^\circ\text{C}$, and current $0\,\text{A}$ ($2.0\,\text{s}$ duration).
+  - Thermal: 100 corresponding 8×8 spatial thermal frames from Phase 5 in $^\circ\text{C}$ (`provenance: "SYNTHETIC"`).
 - **Outputs**: Master tabular dataset with canonical 14-feature matrix $X$, physical `cell_id` (for LOGO grouping only), `cycle_index` (metadata only, strictly excluded from $X$), provenance tags, and ground-truth triage labels.
 - **Acceptance Criteria**: Exact 14 canonical features in order; zero NaN or infinite values; provenance metadata columns explicitly present.
 - **Testing Requirements**: Unit tests checking feature calculation on known synthetic test signals and verifying provenance preservation.
@@ -207,7 +211,6 @@ ThermoCell-AI is built in 12 structured phases that systematically transition fr
 **Success Criteria**:
 1. FastAPI app running with CORS, structured error handlers, and interactive OpenAPI documentation (`/docs`).
 2. `POST /api/simulate` returns 10-second voltage, current, and thermal telemetry adhering to `BatteryPulseTelemetry` (including required `v_pre_pulse` and `RelaxationTelemetry`) with strict array shape, finite float checks, and timestamp monotonicity validation.
-3. `POST /api/predict` returns immutable `DiagnosticPrediction` validating that `class_probabilities` contains exactly `REUSE`, `RETIRE`, `INVESTIGATE`, sums to $1.0 \pm 10^{-4}$, and `confidence == class_probabilities[triage_class.value]`.
 3. `POST /api/predict` returns immutable `DiagnosticPrediction` validating that `class_probabilities` contains exactly `REUSE`, `RETIRE`, `INVESTIGATE`, sums to $1.0 \pm 10^{-4}$, and `confidence` equals `class_probabilities[triage_class.value]` within $10^{-4}$ tolerance (`abs(confidence - class_probabilities[triage_class.value]) <= 1e-4`).
 4. `GET /api/cells` provides historical NASA cell summaries and cycle degradation curves.
 5. All responses strictly enforce immutable `provenance` metadata.
