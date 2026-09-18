@@ -1,124 +1,370 @@
 # System Architecture & Technical Design
 
-## Target Architecture Pipeline
+## Target Architecture Pipeline & Data Provenance
 
 ```text
 +-------------------------------------------------------------+
-|                NASA REAL BATTERY DATA (REAL)                |
+|                NASA REAL BATTERY DATA [REAL]                |
 |       (Ames Prognostics Center: B0005, B0006, B0007, B0018) |
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|               Data Ingestion & Preprocessing                |
-|     - Extract discharge cycles, capacity, bulk temp         |
-|     - Derive SoH ground truth and nominal parameters        |
+|            Data Ingestion & Preprocessing [REAL]            |
+|     - Extract discharge capacity trajectories C(k)          |
+|     - Physical cell_id separated from cycle_index           |
+|     - Derive SoH = C(k) / 2.0 Ah and cycle degradation      |
+|     - Extract empirical bulk surface thermocouple rates     |
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|       Physics-Informed 10s Pulse Simulation (SYNTHETIC)     |
+|     Physics-Informed 10s Pulse Simulation [SYNTHETIC]       |
 |     - 1-RC / 2-RC Equivalent Circuit Model (ECM)            |
-|     - Current pulse excitation (I = 2A-5A for 10s)          |
-|     - Calculates ohmic drop ΔV_0 and polarization curve     |
+|     - 10s constant-current pulse (I = 3A @ 10Hz, 100 steps) |
+|     - Ohmic drop ΔV_0 ≈ 0.24-0.30V & polarization curve V(t)|
+|     - 2s post-pulse relaxation window (20 steps)            |
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|          Synthetic Thermal Response (SYNTHETIC)             |
-|     - Lumped-parameter heat balance:                        |
-|       m*Cp*(dT/dt) = I^2*R_int - h*A*(T - T_amb)            |
-|     - Validated bulk ΔT against real NASA discharge rates   |
+|        Synthetic Bulk Thermal Kinetics [SYNTHETIC]          |
+|     - Lumped energy balance: m*Cp*(dT/dt) = I^2*R - h*A*ΔT  |
+|     - Calibrated against empirical NASA bulk heating rates  |
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|         Synthetic 8×8 Thermal Frames (SYNTHETIC)            |
-|     - 2D Gaussian hotspot model centered at terminal tabs   |
-|     - Spatial heat diffusion equation across 64 pixels      |
-|     - Sensor noise & AMG8833 resolution (0.25°C step)       |
+|        Synthetic 8×8 Thermal Frame Array [SYNTHETIC]        |
+|     - 2D anisotropic heat conduction across 64 pixels       |
+|     - Active cell FOV bounding box (~3×7) + terminal hotspot|
+|     - 0.25°C quantization & realistic sensor noise (AMG8833)|
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|            Feature Extraction & Vector Assembly             |
-|     - Electrical: DCIR, ΔV_0, ΔV_10, dV/dt, V_recovery      |
-|     - Thermal: Mean T, Max T, ΔT/Δt, spatial variance,      |
-|       tab-to-can gradient, hotspot eccentricity             |
+|       Canonical 14-Feature Extraction [SYNTHETIC]           |
+|     - Electrical (5): OCV, DCIR, ΔV10, dV/dt_slope,         |
+|       V_recovery_rate                                       |
+|     - Bulk Thermal (4): T_initial, ΔT_bulk, dT/dt_max,      |
+|       τ_cool                                                |
+|     - Spatial (5): T_max_pixel, T_mean_cell, σ²_T,          |
+|       ∇T_tab-body, hotspot_eccentricity                     |
+|     - Preserves provenance columns in extracted_features.csv|
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|              ML Diagnostic Classifier (PREDICTED)           |
-|     - Calibrated Classifier (Random Forest / GBDT)          |
-|     - Outputs: REUSE / RETIRE / INVESTIGATE                 |
-|     - Confidence probabilities & feature importance         |
+|           ML Diagnostic Classifier [PREDICTED]              |
+|     - Leave-One-Group-Out (LOGO) CV grouped by cell_id      |
+|     - Mutually exclusive triage: RETIRE > INVESTIGATE       |
+|       > REUSE (RETIRE tripwires first; REUSE if all nominal)|
+|     - Calibrated class probabilities & feature importance   |
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|                    FastAPI Backend Service                  |
+|                  FastAPI Backend Service                    |
 |     - REST Endpoints: /api/simulate, /api/predict,          |
-|       /api/stream-thermal, /api/telemetry/ingest            |
-|     - Strict Pydantic schemas with provenance badges        |
+|       /api/cells, /api/stream-thermal, /api/telemetry/ingest|
+|     - Strict Pydantic contracts & TelemetryBufferService    |
 +-------------------------------------------------------------+
                               |
                               v
 +-------------------------------------------------------------+
-|                React + TypeScript Dashboard                 |
-|     - Live 8×8 thermal grid heatmap with interpolation      |
-|     - Real-time 10s V(t) & T(t) pulse curves                |
-|     - Diagnostic result badge: REUSE / RETIRE / INVESTIGATE |
-|     - Provenance Inspector (REAL vs SYNTHETIC vs PREDICTED) |
+|              React + TypeScript + Vite Dashboard            |
+|     - Live 8×8 thermal grid heatmap (bilinear interpolation)|
+|     - Dynamic 10s V(t) & T(t) pulse curves                  |
+|     - Triage status badge: REUSE / RETIRE / INVESTIGATE     |
+|     - Provenance Badges ([REAL], [SYNTHETIC], [PREDICTED])  |
 +-------------------------------------------------------------+
 ```
 
-## Review of Proposed Codebase Structure
+---
 
-The proposed structure from the specification is modular, clean, and well-aligned with hackathon team dynamics:
+## Canonical Data Contracts (Pydantic Schemas)
+
+To guarantee software/hardware modularity, strict data provenance tracking, and leak-proof data flow, all backend models enforce exact schema validation:
+
+```python
+import math
+from enum import Enum
+from typing import List, Dict, Optional, Literal
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+
+class ProvenanceEnum(str, Enum):
+    REAL = "REAL"             # Empirical physical laboratory measurements
+    SYNTHETIC = "SYNTHETIC"   # Physically simulated or computationally generated
+    PREDICTED = "PREDICTED"   # Machine learning inference or statistical prediction
+
+class TriageClassEnum(str, Enum):
+    REUSE = "REUSE"
+    RETIRE = "RETIRE"
+    INVESTIGATE = "INVESTIGATE"
+
+class TelemetryFrame(BaseModel):
+    """Represents a single raw 100ms hardware frame streamed from an ESP32 or simulation tick."""
+    cell_id: str = Field(..., description="Physical cell identifier, e.g. 'B0005' or 'HW-001'")
+    cycle_index: Optional[int] = Field(None, description="Cycle index if known")
+    timestamp: float = Field(..., ge=0.0, description="Elapsed time in seconds")
+    voltage: float = Field(..., ge=0.0, le=5.0, description="Instantaneous voltage in Volts")
+    current: float = Field(..., ge=0.0, le=10.0, description="Instantaneous discharge current in Amperes")
+    bulk_temperature: float = Field(..., description="Bulk surface temperature in °C")
+    thermal_frame_8x8: List[List[float]] = Field(..., description="Single 8x8 spatial temperature grid in °C")
+    provenance: ProvenanceEnum = Field(..., description="Origin of the telemetry tick")
+
+    @model_validator(mode="after")
+    def validate_frame_dimensions(self):
+        if len(self.thermal_frame_8x8) != 8 or any(len(row) != 8 for row in self.thermal_frame_8x8):
+            raise ValueError("thermal_frame_8x8 must be exactly 8x8")
+        return self
+
+class RelaxationTelemetry(BaseModel):
+    """Represents the 2-second post-pulse relaxation period (20 samples @ 10Hz, t = 10.0 to 11.9s)."""
+    duration_s: float = Field(default=2.0, description="Relaxation duration in seconds")
+    timestamps: List[float] = Field(..., description="20-element time vector from 10.0 to 11.9s")
+    voltage: List[float] = Field(..., description="20-element voltage relaxation curve")
+    bulk_temperature: List[float] = Field(..., description="20-element bulk temperature relaxation curve")
+
+    @model_validator(mode="after")
+    def validate_relaxation_samples(self):
+        # 1. Exact sample count and finite float validation
+        expected_len = 20
+        for field_name, arr in [
+            ("timestamps", self.timestamps),
+            ("voltage", self.voltage),
+            ("bulk_temperature", self.bulk_temperature),
+        ]:
+            if len(arr) != expected_len:
+                raise ValueError(f"RelaxationTelemetry {field_name} must contain exactly {expected_len} samples, got {len(arr)}")
+            if any(not math.isfinite(x) for x in arr):
+                raise ValueError(f"RelaxationTelemetry {field_name} contains non-finite values (NaN or Inf)")
+
+        # 2. Strict monotonicity and exact timestamp sequence t_i = round(10.0 + 0.1 * i, 1)
+        for i in range(expected_len):
+            expected_t = round(10.0 + 0.1 * i, 1)
+            if abs(self.timestamps[i] - expected_t) > 1e-4:
+                raise ValueError(f"Relaxation timestamp[{i}] must be {expected_t}, got {self.timestamps[i]}")
+            if i > 0 and self.timestamps[i] <= self.timestamps[i - 1]:
+                raise ValueError(f"Relaxation timestamps must be strictly monotonic at index {i}")
+
+        return self
+
+class BatteryPulseTelemetry(BaseModel):
+    """Complete 10-second controlled discharge pulse telemetry payload (100 samples @ 10Hz) plus relaxation."""
+    cell_id: str = Field(..., description="Physical cell identifier (e.g. 'B0005'). Does NOT encode cycle.")
+    cycle_index: Optional[int] = Field(None, description="Cycle index (e.g. 40). Kept separate from cell_id.")
+    provenance: ProvenanceEnum = Field(..., description="Data origin tag: REAL, SYNTHETIC, or PREDICTED")
+    v_pre_pulse: float = Field(..., ge=0.0, le=5.0, description="Pre-pulse open-circuit voltage at t=0.0s before load application (I=0)")
+    sampling_rate_hz: float = Field(default=10.0, description="Sampling rate in Hertz")
+    duration_s: float = Field(default=10.0, description="Active pulse duration in seconds")
+    timestamps: List[float] = Field(..., description="100-element time vector covering [0.0, 9.9]s with 0.1s step")
+    voltage: List[float] = Field(..., description="100-element cell voltage readings (V)")
+    current: List[float] = Field(..., description="100-element discharge current readings (A)")
+    bulk_temperature: List[float] = Field(..., description="100-element bulk temperature readings (°C)")
+    thermal_frames: List[List[List[float]]] = Field(..., description="100 frames of 8x8 spatial temperature matrices (°C)")
+    relaxation: RelaxationTelemetry = Field(..., description="Required 2-second post-pulse relaxation telemetry (20 samples @ 10Hz, 10.0-11.9s) for V_recovery_rate and τ_cool")
+    metadata: Optional[Dict[str, str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fixed_contract(self):
+        # 0. Finite float validation on v_pre_pulse
+        if not math.isfinite(self.v_pre_pulse):
+            raise ValueError("v_pre_pulse must be a finite float")
+
+        # 1. Exact scalar contract
+        if self.sampling_rate_hz != 10.0:
+            raise ValueError(f"sampling_rate_hz must be exactly 10.0, got {self.sampling_rate_hz}")
+        if self.duration_s != 10.0:
+            raise ValueError(f"duration_s must be exactly 10.0, got {self.duration_s}")
+
+        # 2. 1-D telemetry array lengths and finite float values
+        expected_len = 100
+        for field_name, arr in [
+            ("timestamps", self.timestamps),
+            ("voltage", self.voltage),
+            ("current", self.current),
+            ("bulk_temperature", self.bulk_temperature),
+        ]:
+            if len(arr) != expected_len:
+                raise ValueError(f"{field_name} must contain exactly {expected_len} samples, got {len(arr)}")
+            if any(not math.isfinite(x) for x in arr):
+                raise ValueError(f"{field_name} contains non-finite values (NaN or Inf)")
+
+        # 3. Thermal frames dimensions: 100 frames, each 8x8 with finite values
+        if len(self.thermal_frames) != expected_len:
+            raise ValueError(f"thermal_frames must contain exactly {expected_len} frames, got {len(self.thermal_frames)}")
+        for idx, frame in enumerate(self.thermal_frames):
+            if len(frame) != 8 or any(len(row) != 8 for row in frame):
+                raise ValueError(f"thermal_frame at index {idx} is not 8x8")
+            if any(not math.isfinite(val) for row in frame for val in row):
+                raise ValueError(f"thermal_frame at index {idx} contains non-finite values")
+
+        # 4. Timestamp monotonicity, 0.1s spacing, and interval coverage [0.0, 9.9]s
+        for i in range(expected_len):
+            expected_t = round(i * 0.1, 1)
+            if abs(self.timestamps[i] - expected_t) > 1e-4:
+                raise ValueError(f"timestamp[{i}] must be {expected_t}, got {self.timestamps[i]}")
+            if i > 0 and self.timestamps[i] <= self.timestamps[i - 1]:
+                raise ValueError(f"timestamps must be strictly monotonic at index {i}")
+
+        return self
+
+class DiagnosticPrediction(BaseModel):
+    """Machine learning diagnostic triage verdict with strictly enforced PREDICTED provenance (immutable)."""
+    model_config = ConfigDict(frozen=True)
+
+    cell_id: str = Field(..., description="Physical cell identifier")
+    cycle_index: Optional[int] = Field(None, description="Cycle index if applicable")
+    provenance: Literal[ProvenanceEnum.PREDICTED] = ProvenanceEnum.PREDICTED
+    triage_class: TriageClassEnum = Field(..., description="Triage decision: REUSE, RETIRE, or INVESTIGATE")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Calibrated confidence score")
+    class_probabilities: Dict[str, float] = Field(..., description="Class probability distribution")
+    extracted_features: Dict[str, float] = Field(..., description="Extracted canonical 14 features")
+    recommendation: str = Field(..., description="Actionable triage recommendation text")
+
+    @model_validator(mode="after")
+    def validate_prediction_invariants(self):
+        # 1. Enforce exact class probability labels
+        expected_keys = {TriageClassEnum.REUSE.value, TriageClassEnum.RETIRE.value, TriageClassEnum.INVESTIGATE.value}
+        if set(self.class_probabilities.keys()) != expected_keys:
+            raise ValueError(f"class_probabilities must contain exactly {expected_keys}, got {set(self.class_probabilities.keys())}")
+
+        # 2. Enforce probability range [0.0, 1.0] and sum to 1.0 within tolerance
+        prob_sum = 0.0
+        for k, p in self.class_probabilities.items():
+            if p < 0.0 or p > 1.0:
+                raise ValueError(f"Probability for {k} must be in [0.0, 1.0], got {p}")
+            prob_sum += p
+        if abs(prob_sum - 1.0) > 1e-4:
+            raise ValueError(f"class_probabilities must sum to 1.0, got {prob_sum}")
+
+        # 3. Enforce confidence equals the selected class probability
+        selected_prob = self.class_probabilities[self.triage_class.value]
+        if abs(self.confidence - selected_prob) > 1e-4:
+            raise ValueError(f"confidence ({self.confidence}) must match class_probabilities[{self.triage_class.value}] ({selected_prob})")
+
+        return self
+```
+
+---
+
+## Telemetry Ingestion & Hardware Buffering Architecture
+
+To support physical hardware integration (ESP32 + AMG8833 + INA219) without rewriting downstream ML or dashboard components:
+
+```text
+[ Physical Sensors ]
+  AMG8833 (8x8 I2C) + INA219 (V/I I2C)
+          |
+          v
+[ ESP32 Firmware ] -- Serial / HTTP POST --> POST /api/telemetry/ingest
+                                                    |
+                                             (TelemetryFrame)
+                                                    |
+                                                    v
+                                      [ TelemetryBufferService ]
+                                       - Buffers 100 ticks (10s)
+                                       - Buffers 20 ticks relaxation
+                                                    |
+                                                    v
+                                         [ BatteryPulseTelemetry ]
+                                                    |
+                                                    v
+                                     [ FeatureExtractor (14 feats) ]
+                                                    |
+                                                    v
+                                        [ ML Diagnostic Service ]
+                                                    |
+                                                    v
+                                          [ DiagnosticPrediction ]
+```
+
+### Abstract `TelemetrySource` Strategy Pattern
+
+```python
+from abc import ABC, abstractmethod
+
+class TelemetrySource(ABC):
+    @abstractmethod
+    async def get_pulse_telemetry(self, cell_id: str, cycle_index: Optional[int] = None) -> BatteryPulseTelemetry:
+        """Acquire a complete 10-second pulse telemetry payload."""
+        pass
+
+class SyntheticPulseSource(TelemetrySource):
+    """Physics-informed 10-second pulse simulation (Phases 3-5)."""
+    async def get_pulse_telemetry(self, cell_id: str, cycle_index: Optional[int] = None) -> BatteryPulseTelemetry:
+        # Executes ECM simulation + lumped thermal kinetics + 8x8 grid projection
+        ...
+
+class HardwareSerialSource(TelemetrySource):
+    """Aggregated telemetry from ESP32 micro-controller via TelemetryBufferService (Phase 12)."""
+    async def get_pulse_telemetry(self, cell_id: str, cycle_index: Optional[int] = None) -> BatteryPulseTelemetry:
+        # Reads complete aggregated payload from buffer service
+        ...
+```
+
+---
+
+## UI Provenance Visual Language
+
+Every card, chart, and modal in the React dashboard displays a standardized visual provenance badge:
+
+| Provenance | Definition | Tailwind Styling |
+|---|---|---|
+| **REAL** | Empirical measurements from NASA Ames battery cyclers | `bg-blue-950/60 text-blue-300 border border-blue-500/50` |
+| **SYNTHETIC** | Numerically modeled 10s pulse and 8×8 thermal frames | `bg-purple-950/60 text-purple-300 border border-purple-500/50` |
+| **PREDICTED** | Classification verdicts and probabilities from ML model | `bg-emerald-950/60 text-emerald-300 border border-emerald-500/50` |
+
+---
+
+## Review of Proposed Codebase Structure
 
 ```text
 thermocell-ai/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                  # FastAPI application entrypoint & CORS
+│   │   ├── main.py                  # FastAPI entrypoint, CORS, exception handlers
 │   │   ├── api/                     # REST route handlers
-│   │   │   ├── routes_diagnostics.py
-│   │   │   ├── routes_simulation.py
-│   │   │   └── routes_telemetry.py  # Hardware/live ingest endpoint
+│   │   │   ├── routes_diagnostics.py# /api/predict
+│   │   │   ├── routes_simulation.py # /api/simulate
+│   │   │   ├── routes_cells.py      # /api/cells (NASA historical data)
+│   │   │   └── routes_telemetry.py  # /api/telemetry/ingest (Hardware streaming)
 │   │   ├── models/                  # Pydantic request/response schemas
-│   │   │   ├── schemas_battery.py
-│   │   │   └── schemas_provenance.py
+│   │   │   ├── schemas_battery.py   # TelemetryFrame, BatteryPulseTelemetry, RelaxationTelemetry
+│   │   │   └── schemas_provenance.py# ProvenanceEnum, DiagnosticPrediction
 │   │   ├── services/                # Business logic & ML inference service
-│   │   │   ├── ml_service.py
-│   │   │   └── diagnostic_service.py
+│   │   │   ├── ml_service.py        # Model loading & inference
+│   │   │   ├── feature_service.py   # 14-feature extractor
+│   │   │   ├── telemetry_buffer.py  # TelemetryBufferService (ticks -> pulse)
+│   │   │   └── telemetry_source.py  # Abstract source interface
 │   │   ├── simulation/              # Physics engine & thermal grid generator
-│   │   │   ├── ecm_simulator.py
-│   │   │   ├── thermal_model.py
-│   │   │   └── amg8833_synthesizer.py
-│   │   └── utils/                   # Data helpers & logging
+│   │   │   ├── ecm_simulator.py     # 1-RC / 2-RC electrical model
+│   │   │   ├── thermal_model.py     # Lumped thermodynamic kinetics
+│   │   │   └── amg8833_synthesizer.py # 8x8 IR grid projection
+│   │   └── utils/                   # File helpers & JSON serializers
 │   ├── data/
 │   │   ├── raw/                     # NASA raw CSV/MAT files
-│   │   ├── processed/               # Extracted cycle summaries
+│   │   ├── processed/               # Extracted cycle degradation summaries
 │   │   └── synthetic/               # Pre-generated 10s pulse datasets
-│   ├── tests/                       # Backend unit and integration tests
+│   ├── tests/                       # Pytest unit and integration tests
 │   ├── requirements.txt
 │   └── README.md
 │
 ├── frontend/
 │   ├── src/
 │   │   ├── components/              # UI components
-│   │   │   ├── ThermalGrid8x8.tsx   # Canvas/SVG 8x8 IR visualizer
-│   │   │   ├── PulseChart.tsx       # 10s V(t) & I(t) curve
-│   │   │   ├── DiagnosticCard.tsx   # REUSE / RETIRE / INVESTIGATE badge
+│   │   │   ├── ThermalGrid8x8.tsx   # Canvas 8x8 IR visualizer with interpolation
+│   │   │   ├── PulseChart.tsx       # Dynamic 10s V(t) & T(t) pulse curves (OCV, DCIR, ΔV10)
+│   │   │   ├── DiagnosticCard.tsx   # REUSE / RETIRE / INVESTIGATE card
 │   │   │   ├── ProvenanceBadge.tsx  # REAL / SYNTHETIC / PREDICTED indicator
-│   │   │   └── SimulationControls.tsx
+│   │   │   └── SimulationControls.tsx # Play / Pause / Scrub / Speed controls
 │   │   ├── pages/
-│   │   │   ├── DashboardPage.tsx
-│   │   │   └── ComparisonPage.tsx
-│   │   ├── services/                # API client (Axios / Fetch)
+│   │   │   ├── DashboardPage.tsx    # Live diagnostic workstation
+│   │   │   └── ComparisonPage.tsx   # Side-by-side cell comparison
+│   │   ├── services/                # Axios/fetch API client
 │   │   │   └── api.ts
-│   │   └── types/                   # TypeScript interfaces
+│   │   └── types/                   # TypeScript interfaces matching backend models
 │   │       └── telemetry.ts
 │   ├── package.json
 │   ├── vite.config.ts
@@ -127,15 +373,15 @@ thermocell-ai/
 ├── ml/
 │   ├── preprocessing/               # NASA dataset download & parser
 │   ├── simulation/                  # Standalone simulation scripts
-│   ├── features/                    # Feature extractor pipeline
-│   ├── training/                    # Model training & hyperparameter tuning
+│   ├── features/                    # Canonical 14-feature extraction pipeline
+│   ├── training/                    # Leave-One-Group-Out model training
 │   ├── evaluation/                  # Cross-validation & confusion matrix plots
-│   └── saved_models/                # Serialized model artifacts (.joblib/.pkl)
+│   └── saved_models/                # Serialized model artifacts (.joblib)
 │
 ├── hardware/                        # Future AMG8833 + ESP32 integration
 │   ├── esp32_firmware/              # Arduino / PlatformIO sketch
 │   ├── schemas/                     # Serial / HTTP JSON packet definition
-│   └── README.md                    # Hardware wiring and test instructions
+│   └── README.md                    # Hardware wiring and BOM (<$40)
 │
 ├── docs/                            # Architecture specs, diagrams & API docs
 ├── .planning/                       # GSD planning & project management files
@@ -143,12 +389,3 @@ thermocell-ai/
 ├── GEMINI.md
 └── README.md
 ```
-
-### Architectural Recommendations for Student Teams
-1. **Separation of ML Training and Backend Serving**: ML model artifacts are trained in `ml/` and exported via `joblib.dump()` into `ml/saved_models/diagnostic_model.joblib`. The FastAPI backend loads this single artifact into memory on startup inside `ml_service.py`. This decouples the training script dependencies from the fast serving runtime.
-2. **Abstract Hardware Interface (`TelemetrySource`)**:
-   Create a polymorphic base class `TelemetrySource` with two implementations:
-   - `SyntheticPulseSource`: Runs the physics-informed 10-second ECM and 8×8 thermal frame generator.
-   - `HardwareSerialSource`: Reads live JSON frames sent by an ESP32 micro-controller over USB Serial or HTTP POST.
-   Both sources emit the exact same `BatteryPulseTelemetry` Pydantic model. This completely isolates the UI and ML layers from hardware changes.
-

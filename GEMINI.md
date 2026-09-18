@@ -11,9 +11,12 @@ ThermoCell-AI is a software-first diagnostic prototype designed for rapid, low-c
 ### Constraints
 
 - **Tech Stack**: Frontend in React (TypeScript, Vite, Tailwind CSS); Backend in Python 3.10+ (FastAPI, Uvicorn); ML in scikit-learn, NumPy, pandas.
-- **Data Integrity**: Every piece of data displayed or exported must carry explicit provenance labels: `REAL` (NASA telemetry), `SYNTHETIC` (10s pulse and 8×8 spatial frames), or `PREDICTED` (ML classifications and health probabilities).
-- **Leakage Prevention**: ML validation must split by Battery Cell ID (e.g. Train on cells B0005 & B0006, Test on B0007 & B0018), never randomly by cycle or time step.
-- **Budget / Hardware**: Total potential hardware cost must remain under $30–$40 (ESP32 ~$5, AMG8833 ~$15, INA219 ~$3, dummy load resistor/MOSFET ~$5).
+- **Data Integrity**: Every piece of data displayed or exported must carry explicit provenance labels:
+  - `REAL`: Empirical NASA measurements (capacity, cycle index, surface thermocouple readings).
+  - `SYNTHETIC`: Numerically simulated 10-second discharge pulse and 8×8 spatial thermal frames.
+  - `PREDICTED`: Machine learning triage classifications and calibrated probability distributions.
+- **Leakage Prevention & Cell ID Definition**: `cell_id` represents ONLY the physical battery cell (e.g. `"B0005"`). The cycle identifier must remain in a separate `cycle_index` field (e.g. `40`). Cross-validation and leakage audits group strictly on `cell_id` so that all cycles from a physical cell remain in the same fold (Leave-One-Group-Out CV).
+- **Hardware Budget**: Total prospective hardware bill of materials must remain under $30–$40 (ESP32 ~$5, AMG8833 ~$15, INA219 ~$3, power MOSFET / dummy load resistor ~$5).
 
 <!-- GSD:project-end -->
 
@@ -25,14 +28,14 @@ ThermoCell-AI is a software-first diagnostic prototype designed for rapid, low-c
 
 | Layer | Selected Technology | Alternative Considered | Rationale |
 |-------|---------------------|------------------------|-----------|
-| **Frontend Framework** | React 18+ (TypeScript) | Vue, Svelte, Vanilla JS | Broad team familiarity, rich ecosystem for data visualization and charts |
-| **Frontend Build Tool** | Vite | Create React App, Webpack | Instant HMR, zero-config TS support, lightweight and fast build times |
-| **Frontend Styling** | Tailwind CSS | CSS Modules, Material UI | Rapid UI prototyping, highly customizable utility classes for dark mode and telemetry cards |
-| **Visualization & Heatmap**| Canvas API / HTML5 SVG + Lucide Icons | Chart.js, Recharts, D3.js | Direct 8×8 grid rendering via Canvas/SVG enables smooth interpolation (bilinear upsampling) without heavy charting overhead |
+| **Frontend Framework** | React 18+ (TypeScript) | Vue, Svelte, Vanilla JS | Broad team familiarity, rich ecosystem for data visualization and state management |
+| **Frontend Build Tool** | Vite | Create React App, Webpack | Instant HMR, zero-config TS support, lightweight and ultra-fast build times |
+| **Frontend Styling** | Tailwind CSS | CSS Modules, Material UI | Rapid UI prototyping, customizable utility classes for dark/light themes and telemetry cards |
+| **Visualization & Heatmap**| HTML5 Canvas API / SVG + Lucide Icons | Chart.js, Recharts, D3.js | Direct 8×8 grid rendering via Canvas/SVG enables smooth bilinear interpolation without heavy charting overhead |
 | **Backend Framework** | FastAPI (Python 3.10+) | Flask, Django | High-performance async endpoints, automatic OpenAPI/Swagger docs, Pydantic type validation |
-| **ML & Data Processing** | pandas, NumPy, scikit-learn | PyTorch, TensorFlow | Lightweight tabular/feature ML (Random Forest, Gradient Boosting); no GPU requirement; student-friendly |
+| **ML & Data Processing** | pandas, NumPy, scikit-learn | PyTorch, TensorFlow | Lightweight tabular ML (Random Forest, Gradient Boosting); no GPU requirement; student-friendly |
 | **Image / Spatial Ops** | OpenCV (opencv-python-headless) or SciPy `ndimage` | PIL, pure Python | Minimal footprint; useful specifically for Gaussian filtering, spatial thermal gradient computation, and 8×8 upscaling |
-| **Storage** | Flat files (CSV, JSON) | PostgreSQL, SQLite | Zero installation friction for a 5-member team; raw and synthetic data remain versionable and human-readable |
+| **Storage** | Flat files (CSV, JSON) | PostgreSQL, SQLite | Zero installation friction for a 5-member student team; raw and synthetic data remain versionable and human-readable |
 
 ## Component Details
 
@@ -47,7 +50,7 @@ ThermoCell-AI is a software-first diagnostic prototype designed for rapid, low-c
 - `scipy>=1.11.0`
 - `opencv-python-headless>=4.8.0` (or `scipy.ndimage` fallback)
 - `pytest>=8.0.0`
-- `httpx>=0.27.0` (for FastAPI test client)
+- `httpx>=0.27.0` (for FastAPI async test client)
 
 ### Frontend Dependencies (`package.json`)
 
@@ -56,7 +59,7 @@ ThermoCell-AI is a software-first diagnostic prototype designed for rapid, low-c
 - `vite`
 - `@vitejs/plugin-react`
 - `tailwindcss`, `postcss`, `autoprefixer`
-- `lucide-react` (clean icons for battery, thermometer, alerts)
+- `lucide-react` (clean icons for battery, thermometer, status alerts)
 - `clsx`, `tailwind-merge` (UI utility helpers)
 
 ## Key Tradeoffs & Decisions
