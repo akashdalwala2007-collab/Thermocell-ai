@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    host: process.env.VITE_DEV_HOST ? '0.0.0.0' : '127.0.0.1',
+    host: process.env.VITE_DEV_HOST === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1',
   },
 });
 
