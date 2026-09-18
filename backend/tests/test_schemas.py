@@ -597,3 +597,50 @@ def test_cycle_index_reject_negative(invalid_cycle):
     with pytest.raises(ValidationError):
         DiagnosticPrediction(**pred_payload)
 
+
+# =====================================================================
+# 8. Strict Schema Rejection of Unknown Fields (extra="forbid")
+# =====================================================================
+
+def test_telemetry_frame_rejects_unknown_fields():
+    """TelemetryFrame must reject any unknown/extra fields."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TelemetryFrame(
+            cell_id="B0005",
+            timestamp=0.0,
+            voltage=3.85,
+            current=3.0,
+            bulk_temperature=25.0,
+            thermal_frame_8x8=[[25.0] * 8 for _ in range(8)],
+            provenance=ProvenanceEnum.SYNTHETIC,
+            unknown_extra_field="not_allowed",
+        )
+
+
+def test_relaxation_telemetry_rejects_unknown_fields():
+    """RelaxationTelemetry must reject any unknown/extra fields."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        RelaxationTelemetry(
+            duration_s=2.0,
+            timestamps=[round(10.0 + 0.1 * i, 1) for i in range(20)],
+            voltage=[3.60] * 20,
+            bulk_temperature=[28.0] * 20,
+            unknown_extra_field="not_allowed",
+        )
+
+
+def test_battery_pulse_telemetry_rejects_unknown_fields():
+    """BatteryPulseTelemetry must reject any unknown/extra fields."""
+    payload = make_valid_pulse_payload()
+    payload["unknown_extra_field"] = "not_allowed"
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        BatteryPulseTelemetry(**payload)
+
+
+def test_diagnostic_prediction_rejects_unknown_fields():
+    """DiagnosticPrediction must reject any unknown/extra fields while remaining frozen."""
+    payload = make_valid_prediction_payload()
+    payload["unknown_extra_field"] = "not_allowed"
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        DiagnosticPrediction(**payload)
+

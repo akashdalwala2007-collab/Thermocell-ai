@@ -60,6 +60,8 @@ class ImmutableDict(dict):
 
 class TelemetryFrame(BaseModel):
     """Represents a single raw 100ms hardware frame streamed from an ESP32 or simulation tick."""
+    model_config = ConfigDict(extra="forbid")
+
     cell_id: PhysicalCellId = Field(..., description="Physical cell identifier, e.g. 'B0005' or 'HW-001'. Does NOT encode cycle.")
     cycle_index: Optional[int] = Field(None, ge=0, description="Cycle index if known")
     timestamp: float = Field(..., ge=0.0, description="Elapsed time in seconds")
@@ -92,6 +94,8 @@ class TelemetryFrame(BaseModel):
 
 class RelaxationTelemetry(BaseModel):
     """Represents the 2-second post-pulse relaxation period (20 samples @ 10Hz, t = 10.0 to 11.9s)."""
+    model_config = ConfigDict(extra="forbid")
+
     duration_s: float = Field(default=2.0, description="Relaxation duration in seconds")
     timestamps: List[float] = Field(..., description="20-element time vector from 10.0 to 11.9s")
     voltage: List[float] = Field(..., description="20-element voltage relaxation curve")
@@ -130,6 +134,8 @@ class RelaxationTelemetry(BaseModel):
 
 class BatteryPulseTelemetry(BaseModel):
     """Complete 10-second controlled discharge pulse telemetry payload (100 samples @ 10Hz) plus relaxation."""
+    model_config = ConfigDict(extra="forbid")
+
     cell_id: PhysicalCellId = Field(..., description="Physical cell identifier (e.g. 'B0005'). Does NOT encode cycle.")
     cycle_index: Optional[int] = Field(None, ge=0, description="Cycle index (e.g. 40). Kept separate from cell_id.")
     provenance: ProvenanceEnum = Field(..., description="Data origin tag: REAL, SYNTHETIC, or PREDICTED")
@@ -205,7 +211,7 @@ class BatteryPulseTelemetry(BaseModel):
 
 class DiagnosticPrediction(BaseModel):
     """Machine learning diagnostic triage verdict with strictly enforced PREDICTED provenance (deeply immutable)."""
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     cell_id: PhysicalCellId = Field(..., description="Physical cell identifier")
     cycle_index: Optional[int] = Field(None, ge=0, description="Cycle index if applicable")

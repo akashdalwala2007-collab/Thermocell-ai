@@ -65,4 +65,5 @@ ehthumbs.db
 backend/data/raw/*.mat
 backend/data/raw/*.csv.gz
 backend/data/cache/
+*.cache
 
