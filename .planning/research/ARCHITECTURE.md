@@ -90,8 +90,6 @@ To guarantee software/hardware modularity, strict data provenance tracking, and 
 import math
 import re
 from enum import Enum
-from typing import List, Dict, Optional, Literal
-from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import List, Dict, Optional, Literal, Annotated
 from pydantic import BaseModel, Field, ConfigDict, model_validator, AfterValidator
 
@@ -124,7 +122,6 @@ PhysicalCellId = Annotated[str, AfterValidator(validate_physical_cell_id)]
 
 class TelemetryFrame(BaseModel):
     """Represents a single raw 100ms hardware frame streamed from an ESP32 or simulation tick."""
-    cell_id: str = Field(..., description="Physical cell identifier, e.g. 'B0005' or 'HW-001'")
     cell_id: PhysicalCellId = Field(..., description="Physical cell identifier, e.g. 'B0005' or 'HW-001'. Does NOT encode cycle.")
     cycle_index: Optional[int] = Field(None, description="Cycle index if known")
     timestamp: float = Field(..., ge=0.0, description="Elapsed time in seconds")
@@ -179,11 +176,9 @@ class RelaxationTelemetry(BaseModel):
 
 class BatteryPulseTelemetry(BaseModel):
     """Complete 10-second controlled discharge pulse telemetry payload (100 samples @ 10Hz) plus relaxation."""
-    cell_id: str = Field(..., description="Physical cell identifier (e.g. 'B0005'). Does NOT encode cycle.")
     cell_id: PhysicalCellId = Field(..., description="Physical cell identifier (e.g. 'B0005'). Does NOT encode cycle.")
     cycle_index: Optional[int] = Field(None, description="Cycle index (e.g. 40). Kept separate from cell_id.")
     provenance: ProvenanceEnum = Field(..., description="Data origin tag: REAL, SYNTHETIC, or PREDICTED")
-    v_pre_pulse: float = Field(..., ge=0.0, le=5.0, description="Pre-pulse open-circuit voltage at t=0.0s before load application (I=0)")
     v_pre_pulse: float = Field(..., ge=0.0, le=5.0, description="Pre-pulse open-circuit voltage acquired immediately prior to load application (I=0)")
     sampling_rate_hz: float = Field(default=10.0, description="Sampling rate in Hertz")
     duration_s: float = Field(default=10.0, description="Active pulse duration in seconds")
