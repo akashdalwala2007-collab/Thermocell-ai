@@ -14,6 +14,8 @@ All feature extraction, machine learning models, FastAPI endpoints, and UI dashb
 
 1. **`OCV`**: Open-circuit voltage measured from the explicit pre-pulse voltage sample `v_pre_pulse` immediately prior to load application at $t = 0.0\,\text{s}$ ($I = 0\,\text{A}$) ($\text{V}$).
 2. **`DCIR`**: Direct current internal resistance derived from immediate ohmic drop $\Delta V_0$ between `v_pre_pulse` and active-pulse sample $V(t = 0.1\,\text{s})$ under 3A load: $\text{DCIR} = \Delta V_0 / I_{\text{pulse}}$ ($\Omega$).
+1. **`OCV`**: Open-circuit voltage measured from the explicit unloaded pre-pulse voltage sample `v_pre_pulse` immediately prior to load application ($I = 0\,\text{A}$) ($\text{V}$).
+2. **`DCIR`**: Direct current internal resistance derived from immediate ohmic drop $\Delta V_0$ between unloaded pre-pulse baseline `v_pre_pulse` ($I = 0\,\text{A}$) and first post-load active-pulse sample $V(t = 0.0\,\text{s})$ under 3A load: $\text{DCIR} = \Delta V_0 / I_{\text{pulse}} = R_0$ ($\Omega$).
 3. **`ΔV10`**: Total voltage drop over the 10-second active pulse at final sample $t = 9.9\,\text{s}$: $\Delta V_{10} = v_{\text{pre\_pulse}} - V(t = 9.9\,\text{s})$ ($\text{V}$).
 4. **`dV/dt_slope`**: Linear regression slope of voltage decline from $t = 1.0\,\text{s}$ to $9.9\,\text{s}$ across active pulse samples ($\text{V/s}$).
 5. **`V_recovery_rate`**: Voltage rebound rate during the 20-sample relaxation window from $t = 10.0\,\text{s}$ to $11.9\,\text{s}$ ($\Delta t = 1.9\,\text{s}$): $\frac{V_{\text{relax}}(t = 11.9\,\text{s}) - V_{\text{relax}}(t = 10.0\,\text{s})}{1.9\,\text{s}}$ ($\text{V/s}$).

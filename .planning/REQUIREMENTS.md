@@ -53,6 +53,7 @@
 - [ ] **API-01**: Create FastAPI application with CORS middleware, structured error handling, and interactive OpenAPI documentation (`/docs`).
 - [ ] **API-02**: Implement `POST /api/simulate` endpoint returning 10s synthetic pulse voltage and thermal telemetry validated against `BatteryPulseTelemetry` (including required `v_pre_pulse` and `RelaxationTelemetry`).
 - [ ] **API-03**: Implement `POST /api/predict` endpoint returning immutable `DiagnosticPrediction` validating that `class_probabilities` contains exactly `REUSE`, `RETIRE`, `INVESTIGATE`, sums to $1.0 \pm 10^{-4}$, and `confidence == class_probabilities[triage_class.value]`.
+- [ ] **API-03**: Implement `POST /api/predict` endpoint returning immutable `DiagnosticPrediction` validating that `class_probabilities` contains exactly `REUSE`, `RETIRE`, `INVESTIGATE`, sums to $1.0 \pm 10^{-4}$, and `confidence` equals `class_probabilities[triage_class.value]` within $10^{-4}$ tolerance (`abs(confidence - class_probabilities[triage_class.value]) <= 1e-4`).
 - [ ] **API-04**: Implement `GET /api/cells` and `GET /api/cells/{cell_id}/history` endpoints serving processed NASA cycle baselines.
 - [ ] **API-05**: Implement `GET /api/stream-thermal` for real-time frame streaming and enforce `provenance` field on all responses.
 

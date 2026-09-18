@@ -88,9 +88,12 @@ To guarantee software/hardware modularity, strict data provenance tracking, and 
 
 ```python
 import math
+import re
 from enum import Enum
 from typing import List, Dict, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict, model_validator
+from typing import List, Dict, Optional, Literal, Annotated
+from pydantic import BaseModel, Field, ConfigDict, model_validator, AfterValidator
 
 class ProvenanceEnum(str, Enum):
     REAL = "REAL"             # Empirical physical laboratory measurements
@@ -102,9 +105,27 @@ class TriageClassEnum(str, Enum):
     RETIRE = "RETIRE"
     INVESTIGATE = "INVESTIGATE"
 
+def validate_physical_cell_id(v: str) -> str:
+    """Enforces that cell_id represents strictly a physical cell and rejects composite cycle strings."""
+    if not isinstance(v, str):
+        raise ValueError("cell_id must be a string")
+    v_clean = v.strip()
+    if not v_clean:
+        raise ValueError("cell_id cannot be empty")
+    # Reject composite cycle markers like -CYC40, _cycle10, etc.
+    if re.search(r"(?i)[-_]?(cyc|cycle)\d*", v_clean):
+        raise ValueError(f"cell_id '{v}' invalid: composite cycle strings are prohibited. Keep cycle in cycle_index.")
+    # Must match alphanumeric identifiers (e.g. 'B0005', 'HW-001', 'CELL_A')
+    if not re.match(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$", v_clean):
+        raise ValueError(f"cell_id '{v}' invalid format: must be a valid physical cell identifier")
+    return v_clean
+
+PhysicalCellId = Annotated[str, AfterValidator(validate_physical_cell_id)]
+
 class TelemetryFrame(BaseModel):
     """Represents a single raw 100ms hardware frame streamed from an ESP32 or simulation tick."""
     cell_id: str = Field(..., description="Physical cell identifier, e.g. 'B0005' or 'HW-001'")
+    cell_id: PhysicalCellId = Field(..., description="Physical cell identifier, e.g. 'B0005' or 'HW-001'. Does NOT encode cycle.")
     cycle_index: Optional[int] = Field(None, description="Cycle index if known")
     timestamp: float = Field(..., ge=0.0, description="Elapsed time in seconds")
     voltage: float = Field(..., ge=0.0, le=5.0, description="Instantaneous voltage in Volts")
@@ -128,6 +149,12 @@ class RelaxationTelemetry(BaseModel):
 
     @model_validator(mode="after")
     def validate_relaxation_samples(self):
+        # 0. Finite float validation and exact 2.0s duration contract
+        if not math.isfinite(self.duration_s):
+            raise ValueError("RelaxationTelemetry duration_s must be a finite float")
+        if abs(self.duration_s - 2.0) > 1e-4:
+            raise ValueError(f"RelaxationTelemetry duration_s must be exactly 2.0s, got {self.duration_s}")
+
         # 1. Exact sample count and finite float validation
         expected_len = 20
         for field_name, arr in [
@@ -153,9 +180,11 @@ class RelaxationTelemetry(BaseModel):
 class BatteryPulseTelemetry(BaseModel):
     """Complete 10-second controlled discharge pulse telemetry payload (100 samples @ 10Hz) plus relaxation."""
     cell_id: str = Field(..., description="Physical cell identifier (e.g. 'B0005'). Does NOT encode cycle.")
+    cell_id: PhysicalCellId = Field(..., description="Physical cell identifier (e.g. 'B0005'). Does NOT encode cycle.")
     cycle_index: Optional[int] = Field(None, description="Cycle index (e.g. 40). Kept separate from cell_id.")
     provenance: ProvenanceEnum = Field(..., description="Data origin tag: REAL, SYNTHETIC, or PREDICTED")
     v_pre_pulse: float = Field(..., ge=0.0, le=5.0, description="Pre-pulse open-circuit voltage at t=0.0s before load application (I=0)")
+    v_pre_pulse: float = Field(..., ge=0.0, le=5.0, description="Pre-pulse open-circuit voltage acquired immediately prior to load application (I=0)")
     sampling_rate_hz: float = Field(default=10.0, description="Sampling rate in Hertz")
     duration_s: float = Field(default=10.0, description="Active pulse duration in seconds")
     timestamps: List[float] = Field(..., description="100-element time vector covering [0.0, 9.9]s with 0.1s step")
@@ -191,6 +220,13 @@ class BatteryPulseTelemetry(BaseModel):
             if any(not math.isfinite(x) for x in arr):
                 raise ValueError(f"{field_name} contains non-finite values (NaN or Inf)")
 
+        # 2b. Fixed 3.0A discharge current contract (tolerance ±0.05A for simulated/hardware ADC jitter)
+        for idx, c in enumerate(self.current):
+            if abs(c - 3.0) > 0.05:
+                raise ValueError(
+                    f"current[{idx}] ({c:.3f}A) violates fixed 3.0A pulse contract (must be within [2.95, 3.05]A)"
+                )
+
         # 3. Thermal frames dimensions: 100 frames, each 8x8 with finite values
         if len(self.thermal_frames) != expected_len:
             raise ValueError(f"thermal_frames must contain exactly {expected_len} frames, got {len(self.thermal_frames)}")
@@ -214,7 +250,7 @@ class DiagnosticPrediction(BaseModel):
     """Machine learning diagnostic triage verdict with strictly enforced PREDICTED provenance (immutable)."""
     model_config = ConfigDict(frozen=True)
 
-    cell_id: str = Field(..., description="Physical cell identifier")
+    cell_id: PhysicalCellId = Field(..., description="Physical cell identifier")
     cycle_index: Optional[int] = Field(None, description="Cycle index if applicable")
     provenance: Literal[ProvenanceEnum.PREDICTED] = ProvenanceEnum.PREDICTED
     triage_class: TriageClassEnum = Field(..., description="Triage decision: REUSE, RETIRE, or INVESTIGATE")
@@ -251,7 +287,7 @@ class DiagnosticPrediction(BaseModel):
 
 ## Telemetry Ingestion & Hardware Buffering Architecture
 
-To support physical hardware integration (ESP32 + AMG8833 + INA219) without rewriting downstream ML or dashboard components:
+To support physical hardware integration (ESP32 + AMG8833 + INA219) without rewriting downstream ML or dashboard components, the telemetry pipeline enforces a strict 3-state ingestion lifecycle managed by `TelemetryBufferService`:
 
 ```text
 [ Physical Sensors ]
@@ -260,47 +296,80 @@ To support physical hardware integration (ESP32 + AMG8833 + INA219) without rewr
           v
 [ ESP32 Firmware ] -- Serial / HTTP POST --> POST /api/telemetry/ingest
                                                     |
-                                             (TelemetryFrame)
+                                            (TelemetryFrame)
                                                     |
                                                     v
                                       [ TelemetryBufferService ]
-                                       - Buffers 100 ticks (10s)
-                                       - Buffers 20 ticks relaxation
+                                       State 1: PRE_PULSE_BASELINE (I=0A -> v_pre_pulse)
+                                       State 2: ACTIVE_PULSE (100 ticks @ 3A, [0.0, 9.9]s)
+                                       State 3: RELAXATION (20 ticks @ 0A, [10.0, 11.9]s)
                                                     |
                                                     v
                                          [ BatteryPulseTelemetry ]
                                                     |
                                                     v
-                                     [ FeatureExtractor (14 feats) ]
+                                      [ FeatureExtractor (14 feats) ]
                                                     |
                                                     v
-                                        [ ML Diagnostic Service ]
+                                         [ ML Diagnostic Service ]
                                                     |
                                                     v
-                                          [ DiagnosticPrediction ]
+                                           [ DiagnosticPrediction ]
 ```
+
+### 3-State Hardware Ingestion Lifecycle
+
+1. **`PRE_PULSE_BASELINE` (Unloaded OCV State)**:
+   - Acquired immediately prior to load application ($I = 0\,\text{A}$).
+   - The buffer captures an initial baseline open-circuit voltage reading and stores it as scalar `v_pre_pulse`.
+   - **Authoritative Baseline Policy**: To eliminate ambiguity from continuous streaming and prevent stale idle history from corrupting diagnostics while respecting `TelemetryFrame.timestamp >= 0.0`:
+     - The ESP32 transmits an explicit pre-pulse baseline packet (or handshake frame tagged with baseline intent), OR `TelemetryBufferService` deterministically latches the **latest validated low-current frame** ($I < 0.05\,\text{A}$) arriving strictly within the immediate pre-trigger window defined relative to the recorded active pulse trigger timestamp $t_{\text{trigger}}$ (i.e. $t_{\text{frame}} \in [t_{\text{trigger}} - 0.2\,\text{s}, t_{\text{trigger}})$, where all frame timestamps satisfy $t_{\text{frame}} \ge 0.0$).
+     - Stale idle frames where $t_{\text{trigger}} - t_{\text{frame}} > 0.5\,\text{s}$ are automatically discarded from baseline evaluation.
+     - Once `ACTIVE_PULSE` is triggered at $t_{\text{trigger}}$, `v_pre_pulse` is frozen and immutable; no subsequent frame may overwrite it.
+     - The active pulse time vector is then referenced relative to pulse onset, yielding the canonical $[0.0, 9.9]\,\text{s}$ active pulse timestamps.
+     - This measurement is preserved as an explicit scalar field in `BatteryPulseTelemetry`, completely separate from the active pulse time-series arrays.
+
+2. **`ACTIVE_PULSE` (Loaded Discharge State)**:
+   - Initiated when the ESP32 engages the discharge load switch (commanded $I = 3.0\,\text{A}$).
+   - The buffer captures exactly 100 synchronized multi-modal frames at 10 Hz across timestamps $[0.0, 9.9]\,\text{s}$ ($t_i = \text{round}(0.1 \cdot i, 1)$ for $i \in [0, 99]$).
+   - Timestamp $t = 0.0\,\text{s}$ corresponds to the first post-load active pulse sample under $3.0\,\text{A}$ discharge.
+
+3. **`RELAXATION` (Post-Cutoff Recovery State)**:
+   - Initiated when the discharge load is disengaged ($I = 0\,\text{A}$).
+   - The buffer captures exactly 20 synchronized recovery frames at 10 Hz across timestamps $[10.0, 11.9]\,\text{s}$ ($t_i = \text{round}(10.0 + 0.1 \cdot i, 1)$ for $i \in [0, 19]$), representing 2.0s duration.
+   - Upon receiving the 20th relaxation frame, `TelemetryBufferService` synthesizes and validates the complete immutable `BatteryPulseTelemetry` payload containing `v_pre_pulse`, active arrays, and the nested `RelaxationTelemetry` model.
 
 ### Abstract `TelemetrySource` Strategy Pattern
 
 ```python
 from abc import ABC, abstractmethod
 
+class PulseTelemetryRequest(BaseModel):
+    """Validated request model for acquiring 10-second pulse telemetry."""
+    model_config = ConfigDict(frozen=True)
+    cell_id: PhysicalCellId = Field(..., description="Validated physical cell identifier")
+    cycle_index: Optional[int] = Field(None, description="Cycle index if applicable")
+
 class TelemetrySource(ABC):
     @abstractmethod
     async def get_pulse_telemetry(self, cell_id: str, cycle_index: Optional[int] = None) -> BatteryPulseTelemetry:
-        """Acquire a complete 10-second pulse telemetry payload."""
+        """Acquire a complete 10-second pulse telemetry payload after runtime boundary validation."""
         pass
 
 class SyntheticPulseSource(TelemetrySource):
     """Physics-informed 10-second pulse simulation (Phases 3-5)."""
     async def get_pulse_telemetry(self, cell_id: str, cycle_index: Optional[int] = None) -> BatteryPulseTelemetry:
-        # Executes ECM simulation + lumped thermal kinetics + 8x8 grid projection
+        # Runtime boundary validation: explicitly reject composite cycle identifiers (e.g. 'B0005-CYC40')
+        validated_cell_id = validate_physical_cell_id(cell_id)
+        # Executes ECM simulation + lumped thermal kinetics + 8x8 grid projection for validated_cell_id
         ...
 
 class HardwareSerialSource(TelemetrySource):
     """Aggregated telemetry from ESP32 micro-controller via TelemetryBufferService (Phase 12)."""
     async def get_pulse_telemetry(self, cell_id: str, cycle_index: Optional[int] = None) -> BatteryPulseTelemetry:
-        # Reads complete aggregated payload from buffer service
+        # Runtime boundary validation: explicitly reject composite cycle identifiers (e.g. 'B0005-CYC40')
+        validated_cell_id = validate_physical_cell_id(cell_id)
+        # Reads complete aggregated payload from buffer service for validated_cell_id
         ...
 ```
 
