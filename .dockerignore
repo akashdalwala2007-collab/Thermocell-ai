@@ -1,0 +1,44 @@
+# Git and internal planning
+.git/
+.planning/
+.github/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Frontend source and node build artifacts
+frontend/
+node_modules/
+dist/
+
+# Test suites and coverage
+tests/
+backend/tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Local databases and raw binary datasets
+*.db
+*.sqlite
+*.sqlite3
+backend/data/*.db
+backend/data/raw/
+backend/data/cache/
+*.mat
+*.cache
+
+# Hardware firmware and serial scripts (run locally on bench hardware)
+hardware/
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+ENV/
+env/

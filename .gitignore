@@ -39,6 +39,7 @@ dist/
 dist-ssr/
 *.local
 .vite/
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -47,6 +48,16 @@ pnpm-debug.log*
 # Environment & Secrets
 .env
 .env.*
+!.env.example
+
+# Local operational and test databases
+*.db
+*.sqlite
+*.sqlite3
+backend/data/*.db
+
+# Internal GSD Planning & Architecture Artifacts (Local only, excluded from public release)
+.planning/
 
 # IDE & Editor files
 .vscode/
