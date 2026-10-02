@@ -62,6 +62,21 @@ def test_allowed_origins_wildcard(monkeypatch):
     assert s.ALLOWED_ORIGINS == ["*"]
 
 
+def test_allowed_origins_single_url(monkeypatch):
+    """Single URL with trailing slashes, quotes, or whitespace must parse to clean single origin."""
+    for raw in [
+        "https://thermocell-ai.netlify.app",
+        "https://thermocell-ai.netlify.app/",
+        '"https://thermocell-ai.netlify.app"',
+        "'https://thermocell-ai.netlify.app'",
+        "  https://thermocell-ai.netlify.app  ",
+    ]:
+        monkeypatch.setenv("ALLOWED_ORIGINS", raw)
+        reset_settings()
+        s = get_settings()
+        assert s.ALLOWED_ORIGINS == ["https://thermocell-ai.netlify.app"]
+
+
 def test_production_rejects_default_secret_key():
     """Production mode must reject default or short SECRET_KEY."""
     with pytest.raises(ValueError, match="SECRET_KEY must be a non-default secret"):
