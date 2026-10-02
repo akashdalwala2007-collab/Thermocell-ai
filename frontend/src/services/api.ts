@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ThermoCell-AI Frontend API Client
  * Connects React UI to FastAPI backend endpoints with Operator JWT Authentication.
  */
@@ -59,7 +59,8 @@ export interface SessionSummary {
   v_pre_pulse: number;
 }
 
-const API_BASE_URL = 'http://127.0.0.1:8000';
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 const TOKEN_KEY = 'thermocell_operator_token';
 
 type AuthListener = (auth: boolean) => void;
