@@ -149,3 +149,20 @@ def test_production_valid_configuration():
     assert s.is_postgres is True
     assert s.DOCS_ENABLED is False
 
+
+def test_demo_mode_configuration_parsing(monkeypatch):
+    """DEMO_MODE environment variable must be parsed correctly."""
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    reset_settings()
+    assert get_settings().DEMO_MODE is False
+
+    for truthy_val in ["true", "True", "1", "yes"]:
+        monkeypatch.setenv("DEMO_MODE", truthy_val)
+        reset_settings()
+        assert get_settings().DEMO_MODE is True
+
+    for falsy_val in ["false", "False", "0", "no"]:
+        monkeypatch.setenv("DEMO_MODE", falsy_val)
+        reset_settings()
+        assert get_settings().DEMO_MODE is False
+

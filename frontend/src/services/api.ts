@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ThermoCell-AI Frontend API Client
  * Connects React UI to FastAPI backend endpoints with Operator JWT Authentication.
  */
