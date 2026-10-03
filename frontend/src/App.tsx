@@ -172,6 +172,7 @@ export const App: React.FC = () => {
               <ThermalGrid8x8
                 frames={telemetry?.thermal_frames || []}
                 provenance={telemetry?.provenance}
+                sessionId={diagnosticRun?.session_id}
               />
             </div>
           </div>

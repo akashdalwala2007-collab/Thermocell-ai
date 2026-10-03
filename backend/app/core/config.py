@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional
-from pydantic import BaseModel, Field, model_validator
+from typing import List, Optional, Any
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 DEFAULT_DEV_SECRET_KEY = "thermocell-dev-insecure-secret-key-32chars-min!"
 DEFAULT_DEV_HARDWARE_KEY = "thermocell-esp32-default-hw-key"
@@ -30,11 +30,17 @@ def _parse_allowed_origins(val: Optional[str]) -> List[str]:
     ]
     if not val or not val.strip():
         return default_origins
-    
-    if val.strip() == "*":
+
+    raw_clean = val.strip().strip("'\"").strip()
+    if raw_clean == "*":
         return ["*"]
-        
-    parts = [p.strip().rstrip("/") for p in val.split(",") if p.strip()]
+
+    parts: List[str] = []
+    for p in val.split(","):
+        cleaned = p.strip().strip("'\"").strip().rstrip("/")
+        if cleaned:
+            parts.append(cleaned)
+
     return parts if parts else default_origins
 
 
@@ -46,6 +52,7 @@ class Settings(BaseModel):
     ENVIRONMENT: str = Field(default_factory=lambda: os.getenv("ENVIRONMENT", "development"))
     DATABASE_URL: str = Field(default_factory=lambda: os.getenv("DATABASE_URL", _resolve_default_db_path()))
     ALLOWED_ORIGINS: List[str] = Field(default_factory=lambda: _parse_allowed_origins(os.getenv("ALLOWED_ORIGINS")))
+    DEMO_MODE: bool = Field(default_factory=lambda: os.getenv("DEMO_MODE", "false").strip().lower() in ("true", "1", "yes", "t"))
 
     # Security & Auth Settings
     SECRET_KEY: str = Field(default_factory=lambda: os.getenv("SECRET_KEY", DEFAULT_DEV_SECRET_KEY))
@@ -57,6 +64,36 @@ class Settings(BaseModel):
     RATE_LIMIT_ENABLED: bool = Field(default=True)
     MAX_PAYLOAD_BYTES: int = Field(default=1024 * 1024)  # 1 MB
     DOCS_ENABLED: bool = Field(default_factory=lambda: os.getenv("DOCS_ENABLED", "true").lower() in ("true", "1", "yes"))
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def _validate_allowed_origins(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            return _parse_allowed_origins(v)
+        if isinstance(v, (list, tuple, set)):
+            cleaned_parts: List[str] = []
+            for item in v:
+                if isinstance(item, str):
+                    cleaned = item.strip().strip("'\"").strip()
+                    if cleaned == "*":
+                        cleaned_parts.append("*")
+                    else:
+                        cleaned = cleaned.rstrip("/")
+                        if cleaned:
+                            cleaned_parts.append(cleaned)
+                else:
+                    cleaned_parts.append(str(item))
+            return cleaned_parts if cleaned_parts else _parse_allowed_origins(None)
+        return _parse_allowed_origins(None)
+
+    @field_validator("DEMO_MODE", mode="before")
+    @classmethod
+    def _validate_demo_mode(cls, v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes", "t")
+        return bool(v)
 
     @property
     def is_production(self) -> bool:

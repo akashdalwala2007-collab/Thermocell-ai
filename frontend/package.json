@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && tsc -p tsconfig.node.json --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test tests/thermal_grid.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",
