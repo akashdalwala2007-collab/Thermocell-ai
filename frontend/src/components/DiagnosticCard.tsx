@@ -1,12 +1,34 @@
 import React from 'react';
-import { CheckCircle2, AlertTriangle, ShieldX, Sparkles } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, ShieldX, Sparkles, Activity } from 'lucide-react';
 import { DiagnosticPrediction } from '../services/api';
 
 interface DiagnosticCardProps {
   prediction: DiagnosticPrediction | null;
+  isLoading?: boolean;
+  selectedCellId?: string;
 }
 
-export const DiagnosticCard: React.FC<DiagnosticCardProps> = ({ prediction }) => {
+export const DiagnosticCard: React.FC<DiagnosticCardProps> = ({
+  prediction,
+  isLoading = false,
+  selectedCellId,
+}) => {
+  if (isLoading) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[160px] animate-pulse">
+        <div className="flex items-center gap-2.5 text-indigo-400 font-semibold text-sm">
+          <Activity className="w-5 h-5 animate-spin" />
+          <span>Executing 10-Second Diagnostic Screening...</span>
+        </div>
+        <p className="text-xs text-slate-400 max-w-md">
+          {selectedCellId
+            ? `Acquiring pulse telemetry for Cell ${selectedCellId}, evaluating 8×8 spatial thermal frames, and computing ML triage.`
+            : 'Acquiring pulse telemetry, evaluating spatial thermal gradients, and computing ML triage classification.'}
+        </p>
+      </div>
+    );
+  }
+
   if (!prediction) {
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 text-center text-slate-500">
@@ -51,9 +73,16 @@ export const DiagnosticCard: React.FC<DiagnosticCardProps> = ({ prediction }) =>
         <div className="flex items-center gap-3">
           {badgeConfig.icon}
           <div>
-            <span className="text-xs uppercase font-bold tracking-wider opacity-80 block">
-              Second-Life Screening Verdict
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase font-bold tracking-wider opacity-80 block">
+                Second-Life Screening Verdict
+              </span>
+              {(prediction.cell_id || selectedCellId) && (
+                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-slate-950/70 border border-slate-700/60 text-slate-200">
+                  Cell {prediction.cell_id || selectedCellId}
+                </span>
+              )}
+            </div>
             <h2 className="text-xl font-bold tracking-tight text-white">{badgeConfig.title}</h2>
           </div>
         </div>

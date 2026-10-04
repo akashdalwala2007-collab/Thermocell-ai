@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BatteryCharging, Activity, Cpu, History, Lock, LogOut, ShieldCheck } from 'lucide-react';
 import {
   simulatePulse,
@@ -27,6 +27,9 @@ export const App: React.FC = () => {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
 
+  // Active request sequence tracker to strictly reject stale out-of-order responses
+  const activeRequestIdRef = useRef<number>(0);
+
   useEffect(() => {
     const unsubscribe = subscribeAuth((auth: boolean) => {
       setIsLoggedIn(auth);
@@ -38,21 +41,30 @@ export const App: React.FC = () => {
   }, []);
 
   const executeDiagnosticRun = async (selectedProf = profile, selectedCell = cellId) => {
+    const requestId = ++activeRequestIdRef.current;
     setIsLoading(true);
+    // Crucial: Clear stale diagnosticRun immediately so old results are not shown
+    setDiagnosticRun(null);
     setErrorMsg(null);
+
     try {
       const data = await simulatePulse(selectedProf, selectedCell);
-      setDiagnosticRun(data);
-    } catch (err: any) {
-      console.error('Diagnostic run failed:', err);
-      if (err.message && err.message.includes('401')) {
-        setIsLoginModalOpen(true);
-        setErrorMsg('Authentication required. Please sign in with operator credentials.');
-      } else {
-        setErrorMsg(err.message || 'Failed to execute diagnostic run.');
+      // Ensure only the latest triggered execution updates the UI
+      if (requestId === activeRequestIdRef.current) {
+        setDiagnosticRun(data);
+        setIsLoading(false);
       }
-    } finally {
-      setIsLoading(false);
+    } catch (err: any) {
+      if (requestId === activeRequestIdRef.current) {
+        console.error('Diagnostic run failed:', err);
+        if (err.message && err.message.includes('401')) {
+          setIsLoginModalOpen(true);
+          setErrorMsg('Authentication required. Please sign in with operator credentials.');
+        } else {
+          setErrorMsg(err.message || 'Failed to execute diagnostic run.');
+        }
+        setIsLoading(false);
+      }
     }
   };
 
@@ -183,6 +195,8 @@ export const App: React.FC = () => {
           {/* Top Right: Triage Classification Card */}
           <DiagnosticCard
             prediction={prediction || null}
+            isLoading={isLoading}
+            selectedCellId={cellId}
           />
 
           {/* Middle Right: Dynamic Pulse Curve */}
@@ -200,9 +214,11 @@ export const App: React.FC = () => {
           </div>
 
           {/* Bottom Right: Explainability & Provenance Breakdown */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
-            <ExplainabilityBreakdown features={features || null} />
-          </div>
+          {features && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+              <ExplainabilityBreakdown features={features} />
+            </div>
+          )}
 
           {/* Provenance Footer Guard */}
           <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 text-xs text-slate-400 flex flex-col gap-2">
@@ -239,6 +255,8 @@ export const App: React.FC = () => {
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         onSelectSession={(run) => {
+          activeRequestIdRef.current += 1;
+          setIsLoading(false);
           setDiagnosticRun(run);
           if (run.telemetry?.cell_id) {
             setCellId(run.telemetry.cell_id);

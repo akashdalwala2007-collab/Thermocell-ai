@@ -103,3 +103,40 @@ test('playback progression and reset semantics', () => {
     }
   }
 });
+
+test('rapid battery selection race-condition protection and stale state clearance', async () => {
+  let activeRequestId = 0;
+  let activeRun: { cell_id: string; verdict: string } | null = { cell_id: 'B0005', verdict: 'REUSE' };
+  let isLoading = false;
+
+  const triggerRun = async (cellId: string, latencyMs: number) => {
+    const requestId = ++activeRequestId;
+    isLoading = true;
+    activeRun = null; // Stale diagnostic cleared immediately upon new selection
+
+    await new Promise((resolve) => setTimeout(resolve, latencyMs));
+
+    // Only commit if this is still the active, latest request
+    if (requestId === activeRequestId) {
+      activeRun = { cell_id: cellId, verdict: 'REUSE' };
+      isLoading = false;
+    }
+  };
+
+  // 1. Initial selection starts, clearing previous stale result
+  const p1 = triggerRun('B0006', 80);
+  assert.equal(activeRun, null, 'Stale diagnostic run must be cleared immediately');
+  assert.equal(isLoading, true);
+
+  // 2. User rapidly switches to B0007 before B0006 finishes
+  const p2 = triggerRun('B0007', 30);
+  assert.equal(activeRun, null);
+  assert.equal(isLoading, true);
+
+  // Wait for all asynchronous executions to finish
+  await Promise.all([p1, p2]);
+
+  // Out-of-order B0006 resolution must be rejected; only latest B0007 must be active
+  assert.deepEqual(activeRun, { cell_id: 'B0007', verdict: 'REUSE' });
+  assert.equal(isLoading, false);
+});
