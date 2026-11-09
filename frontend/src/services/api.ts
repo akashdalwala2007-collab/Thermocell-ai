@@ -46,6 +46,8 @@ export interface DiagnosticRunResponse {
   telemetry: BatteryPulseTelemetry;
   prediction: DiagnosticPrediction;
   features: Record<string, number>;
+  soh?: number;
+  discharge_capacity?: number;
 }
 
 export interface SessionSummary {
@@ -57,6 +59,30 @@ export interface SessionSummary {
   confidence: number;
   provenance: 'REAL' | 'SYNTHETIC' | 'PREDICTED';
   v_pre_pulse: number;
+  soh?: number;
+  discharge_capacity?: number;
+}
+
+// Hardware Telemetry Types
+export interface HardwareBaselineRequest {
+  cell_id: string;
+  voltage: number;
+}
+
+export interface HardwareFrameRequest {
+  cell_id: string;
+  cycle_index: number;
+  timestamp: number;
+  voltage: number;
+  current: number;
+  bulk_temperature: number;
+  thermal_frame_8x8: number[][];
+  provenance: 'REAL';
+}
+
+export interface HardwareBuildPulseRequest {
+  cell_id: string;
+  cycle_index?: number | null;
 }
 
 const API_BASE_URL =
@@ -155,6 +181,86 @@ export async function simulatePulse(
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Simulation failed: ${response.status} ${errorText}`);
+  }
+
+  return response.json();
+}
+
+// Hardware telemetry endpoints (for ESP32 hardware mode)
+export async function setHardwareBaseline(request: HardwareBaselineRequest): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/telemetry/baseline`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(request),
+  });
+
+  if (response.status === 401) {
+    clearAuthToken();
+    throw new Error('401 Unauthorized: Operator authentication required.');
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Hardware baseline failed: ${response.status} ${errorText}`);
+  }
+
+  return response.json();
+}
+
+export async function ingestHardwareFrame(frame: HardwareFrameRequest): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/telemetry/frame`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(frame),
+  });
+
+  if (response.status === 401) {
+    clearAuthToken();
+    throw new Error('401 Unauthorized: Operator authentication required.');
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Hardware frame ingest failed: ${response.status} ${errorText}`);
+  }
+
+  return response.json();
+}
+
+export async function buildHardwarePulse(request: HardwareBuildPulseRequest): Promise<DiagnosticRunResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/telemetry/build-pulse`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(request),
+  });
+
+  if (response.status === 401) {
+    clearAuthToken();
+    throw new Error('401 Unauthorized: Operator authentication required.');
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Hardware pulse build failed: ${response.status} ${errorText}`);
+  }
+
+  return response.json();
+}
+
+export async function resetHardwareBuffer(): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/telemetry/reset`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+
+  if (response.status === 401) {
+    clearAuthToken();
+    throw new Error('401 Unauthorized: Operator authentication required.');
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Hardware buffer reset failed: ${response.status} ${errorText}`);
   }
 
   return response.json();

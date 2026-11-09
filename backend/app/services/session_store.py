@@ -216,6 +216,22 @@ class DiagnosticSessionStore:
             row = cursor.fetchone()
             if not row:
                 return None
+            telemetry_data = json.loads(row["telemetry_json"])
+            meta = telemetry_data.get("metadata", {}) if isinstance(telemetry_data, dict) else {}
+            soh_val: Optional[float] = None
+            cap_val: Optional[float] = None
+            if isinstance(meta, dict):
+                if "soh" in meta:
+                    try:
+                        soh_val = float(meta["soh"])
+                    except (ValueError, TypeError):
+                        soh_val = None
+                if "discharge_capacity" in meta:
+                    try:
+                        cap_val = float(meta["discharge_capacity"])
+                    except (ValueError, TypeError):
+                        cap_val = None
+
             return {
                 "session_id": row["session_id"],
                 "cell_id": row["cell_id"],
@@ -225,9 +241,11 @@ class DiagnosticSessionStore:
                 "confidence": row["confidence"],
                 "provenance": row["provenance"],
                 "v_pre_pulse": row["v_pre_pulse"],
-                "telemetry": json.loads(row["telemetry_json"]),
+                "telemetry": telemetry_data,
                 "features": json.loads(row["features_json"]),
                 "prediction": json.loads(row["prediction_json"]),
+                "soh": soh_val,
+                "discharge_capacity": cap_val,
             }
 
     def list_cell_sessions(self, cell_id: str, limit: int = 50) -> List[Dict[str, Any]]:
@@ -237,7 +255,7 @@ class DiagnosticSessionStore:
             placeholder = "%s" if self.is_postgres else "?"
             cursor.execute(
                 f"""
-                SELECT session_id, cell_id, cycle_index, created_at, triage_class, confidence, provenance, v_pre_pulse
+                SELECT session_id, cell_id, cycle_index, created_at, triage_class, confidence, provenance, v_pre_pulse, telemetry_json
                 FROM diagnostic_sessions
                 WHERE cell_id = {placeholder}
                 ORDER BY created_at DESC
@@ -245,7 +263,21 @@ class DiagnosticSessionStore:
                 """,
                 (cell_id, limit),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            results = []
+            for row in cursor.fetchall():
+                d = dict(row)
+                t_json = d.pop("telemetry_json", None)
+                if t_json:
+                    try:
+                        meta = json.loads(t_json).get("metadata", {})
+                        if "soh" in meta:
+                            d["soh"] = float(meta["soh"])
+                        if "discharge_capacity" in meta:
+                            d["discharge_capacity"] = float(meta["discharge_capacity"])
+                    except Exception:
+                        pass
+                results.append(d)
+            return results
 
     def list_recent_sessions(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Retrieve recent diagnostic runs across all cells."""
@@ -254,65 +286,38 @@ class DiagnosticSessionStore:
             placeholder = "%s" if self.is_postgres else "?"
             cursor.execute(
                 f"""
-                SELECT session_id, cell_id, cycle_index, created_at, triage_class, confidence, provenance, v_pre_pulse
+                SELECT session_id, cell_id, cycle_index, created_at, triage_class, confidence, provenance, v_pre_pulse, telemetry_json
                 FROM diagnostic_sessions
                 ORDER BY created_at DESC
                 LIMIT {placeholder}
                 """,
                 (limit,),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            results = []
+            for row in cursor.fetchall():
+                d = dict(row)
+                t_json = d.pop("telemetry_json", None)
+                if t_json:
+                    try:
+                        meta = json.loads(t_json).get("metadata", {})
+                        if "soh" in meta:
+                            d["soh"] = float(meta["soh"])
+                        if "discharge_capacity" in meta:
+                            d["discharge_capacity"] = float(meta["discharge_capacity"])
+                    except Exception:
+                        pass
+                results.append(d)
+            return results
 
     def check_and_record_rate_limit(
         self, key: str, bucket: str, limit: int, window_seconds: int = 60
     ) -> Tuple[bool, int]:
-        """
-        Atomically check and record a rate limit event across worker processes.
-        Returns (is_allowed, retry_after_seconds).
-        """
-        now = datetime.now(timezone.utc).timestamp()
-        cutoff = now - float(window_seconds)
-
-        with self._connection() as conn:
-            cursor = conn.cursor()
-            placeholder = "%s" if self.is_postgres else "?"
-
-            cursor.execute(
-                f"DELETE FROM rate_limit_events WHERE timestamp < {placeholder}",
-                (cutoff,),
-            )
-
-            cursor.execute(
-                f"""
-                SELECT COUNT(*), MIN(timestamp)
-                FROM rate_limit_events
-                WHERE key = {placeholder} AND bucket = {placeholder} AND timestamp >= {placeholder}
-                """,
-                (key, bucket, cutoff),
-            )
-            row = cursor.fetchone()
-            if self.is_postgres:
-                count = row["count"] if "count" in row else list(row.values())[0]
-                min_ts = row["min"] if "min" in row else list(row.values())[1]
-            else:
-                count = row[0]
-                min_ts = row[1]
-
-            if count >= limit:
-                retry_after = max(1, int(window_seconds - (now - (min_ts or cutoff))))
-                return False, retry_after
-
-            cursor.execute(
-                f"INSERT INTO rate_limit_events (key, bucket, timestamp) VALUES ({placeholder}, {placeholder}, {placeholder})",
-                (key, bucket, now),
-            )
-            return True, 0
+        """Rate limiting removed for prototype usage: always allows all requests."""
+        return True, 0
 
     def reset_rate_limits(self) -> None:
-        """Clear all rate limit records (used in test fixtures)."""
-        with self._connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM rate_limit_events")
+        """No-op: rate limit tracking disabled for prototype usage."""
+        pass
 
 
 _default_store: Optional[DiagnosticSessionStore] = None

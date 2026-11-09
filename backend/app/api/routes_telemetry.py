@@ -10,6 +10,7 @@ from app.models.schemas_provenance import validate_physical_cell_id
 from app.services.telemetry_source import HardwareBufferSource
 from app.services.ml_service import screen_telemetry
 from app.services.session_store import get_session_store
+from app.services.nasa_service import get_nasa_cycle_record
 from app.core.auth import get_hardware_or_operator
 
 router = APIRouter(prefix="/api/telemetry", tags=["telemetry"])
@@ -54,10 +55,13 @@ def ingest_hardware_frame(
 ) -> Dict[str, Any]:
     """Ingest a single 10Hz TelemetryFrame into the hardware buffer."""
     buf = get_hardware_buffer()
-    if frame.timestamp < 10.0:
-        buf.ingest_active_frame(frame)
-    else:
-        buf.ingest_relaxation_frame(frame)
+    try:
+        if frame.timestamp < 10.0:
+            buf.ingest_active_frame(frame)
+        else:
+            buf.ingest_relaxation_frame(frame)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     return {
         "status": "FRAME_BUFFERED",
@@ -81,6 +85,24 @@ def build_pulse_and_diagnose(
         buf = get_hardware_buffer()
         telemetry = buf.get_pulse_telemetry(cell_id=validated_cell_id, cycle_index=request.cycle_index)
 
+        # Look up empirical NASA cycle benchmark record if matching a physical cell
+        record = get_nasa_cycle_record(
+            validated_cell_id,
+            cycle_index=request.cycle_index,
+        )
+        soh: Optional[float] = None
+        discharge_capacity: Optional[float] = None
+
+        if record is not None:
+            soh = record.soh
+            discharge_capacity = record.discharge_capacity
+            if telemetry.metadata is None:
+                telemetry.metadata = {}
+            telemetry.metadata["soh"] = f"{soh:.2f}"
+            telemetry.metadata["discharge_capacity"] = f"{discharge_capacity:.4f}"
+            telemetry.metadata["empirical_triage"] = record.triage_label.value
+            telemetry.metadata["provenance_soh"] = "REAL"
+
         # Run ML triage
         prediction = screen_telemetry(telemetry)
 
@@ -93,6 +115,8 @@ def build_pulse_and_diagnose(
             "telemetry": telemetry.model_dump(),
             "prediction": prediction.model_dump(),
             "features": dict(prediction.extracted_features),
+            "soh": soh,
+            "discharge_capacity": discharge_capacity,
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

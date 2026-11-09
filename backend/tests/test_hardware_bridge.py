@@ -13,13 +13,21 @@ def test_mock_hardware_stream_packet_counts():
     assert len(packets) == 122  # 1 baseline + 100 active + 20 relaxation + 1 completion
     assert packets[0]["event"] == "PRE_PULSE_BASELINE"
     assert packets[-1]["event"] == "PULSE_SEQUENCE_COMPLETE"
+    for packet in packets:
+        assert packet.get("provenance") == "REAL"
+
+    # Also test parameterized SYNTHETIC stream
+    synth_packets = list(generate_mock_hardware_stream(cell_id="HW-001", cycle_index=1, provenance="SYNTHETIC"))
+    assert len(synth_packets) == 122
+    for packet in synth_packets:
+        assert packet.get("provenance") == "SYNTHETIC"
 
 
 def test_hardware_bridge_buffer_aggregation():
     """Hardware buffer must aggregate streamed frames into valid BatteryPulseTelemetry with REAL provenance."""
     buffer = HardwareBufferSource()
-    stream = generate_mock_hardware_stream(cell_id="HW-001", cycle_index=5, v_pre_pulse=4.15)
-    
+    stream = generate_mock_hardware_stream(cell_id="HW-001", cycle_index=5, v_pre_pulse=4.15, provenance="REAL")
+
     ingest_stream_into_buffer(stream, buffer)
     telemetry = buffer.get_pulse_telemetry(cell_id="HW-001", cycle_index=5)
 
@@ -36,10 +44,23 @@ def test_hardware_bridge_buffer_aggregation():
     assert len(telemetry.relaxation.timestamps) == 20
 
 
+def test_hardware_bridge_rejects_synthetic_provenance():
+    """Hardware buffer must strictly reject frames with SYNTHETIC provenance to enforce data integrity."""
+    buffer = HardwareBufferSource()
+    stream = generate_mock_hardware_stream(cell_id="HW-001", cycle_index=5, v_pre_pulse=4.15, provenance="SYNTHETIC")
+
+    ingest_stream_into_buffer(stream, buffer)
+
+    with pytest.raises(ValueError) as exc_info:
+        buffer.get_pulse_telemetry(cell_id="HW-001", cycle_index=5)
+
+    assert "provenance" in str(exc_info.value).lower() or "REAL" in str(exc_info.value)
+
+
 def test_hardware_payload_decision_fusion():
     """Aggregated hardware telemetry must run through feature extraction and ML decision fusion."""
     buffer = HardwareBufferSource()
-    stream = generate_mock_hardware_stream(cell_id="HW-002", dcir=0.092, v_pre_pulse=4.14)
+    stream = generate_mock_hardware_stream(cell_id="HW-002", dcir=0.092, v_pre_pulse=4.14, provenance="REAL")
     ingest_stream_into_buffer(stream, buffer)
     telemetry = buffer.get_pulse_telemetry(cell_id="HW-002")
 

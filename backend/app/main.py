@@ -1,6 +1,7 @@
 """ThermoCell-AI FastAPI application entrypoint."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import List
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -9,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.middleware import SecurityHeadersMiddleware, PayloadSizeLimitMiddleware
-from app.core.rate_limit import RateLimitMiddleware
 from app.core.errors import (
     http_exception_handler,
     validation_exception_handler,
@@ -21,8 +21,24 @@ from app.api.routes_simulation import router as simulation_router
 from app.api.routes_diagnostics import router as diagnostics_router
 from app.api.routes_cells import router as cells_router
 from app.api.routes_telemetry import router as telemetry_router
+from app.services.session_store import get_session_store, reset_session_store
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for database initialization and cleanup."""
+    # Startup: Initialize database connection
+    store = get_session_store()
+    # Force schema creation on startup
+    store._init_db()
+
+    yield
+
+    # Shutdown: Close database connections
+    reset_session_store()
+
 
 app = FastAPI(
     title=settings.API_TITLE,
@@ -31,6 +47,7 @@ app = FastAPI(
     docs_url="/docs" if settings.DOCS_ENABLED else None,
     redoc_url="/redoc" if settings.DOCS_ENABLED else None,
     openapi_url="/openapi.json" if settings.DOCS_ENABLED else None,
+    lifespan=lifespan,
 )
 
 # Exception handlers
@@ -38,8 +55,7 @@ app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
-# Middlewares (executed in reverse registration order: CORS -> Security -> Payload -> RateLimit)
-app.add_middleware(RateLimitMiddleware)
+# Middlewares (executed in reverse registration order: CORS -> Security -> Payload)
 app.add_middleware(PayloadSizeLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(

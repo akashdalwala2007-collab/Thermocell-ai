@@ -18,15 +18,20 @@ def generate_mock_hardware_stream(
     v_pre_pulse: float = 4.14,
     pulse_current: float = 3.0,
     dcir: float = 0.095,
+    provenance: str = "REAL",
 ) -> Generator[Dict[str, Any], None, None]:
-    """Generate realistic mock serial stream lines mirroring the ESP32 firmware output."""
+    """Generate realistic mock serial stream lines mirroring the ESP32 firmware output.
+
+    Mirrors the physical ESP32 firmware packet structure (doc["provenance"] = "REAL").
+    Allows setting provenance="SYNTHETIC" for testing buffer provenance rejection.
+    """
     # 1. Baseline Event
     yield {
         "event": "PRE_PULSE_BASELINE",
         "cell_id": cell_id,
         "cycle_index": cycle_index,
         "v_pre_pulse": v_pre_pulse,
-        "provenance": "REAL",
+        "provenance": provenance,
     }
 
     # 2. 100 Active Pulse Frames (t = 0.0 to 9.9s @ 10Hz)
@@ -43,7 +48,7 @@ def generate_mock_hardware_stream(
             "current": pulse_current,
             "bulk_temperature": temp,
             "thermal_frame_8x8": grid,
-            "provenance": "REAL",
+            "provenance": provenance,
         }
 
     # 3. 20 Relaxation Frames (t = 10.0 to 11.9s @ 10Hz)
@@ -60,7 +65,7 @@ def generate_mock_hardware_stream(
             "current": 0.0,
             "bulk_temperature": temp,
             "thermal_frame_8x8": grid,
-            "provenance": "REAL",
+            "provenance": provenance,
         }
 
     # 4. Completion Event
@@ -68,7 +73,7 @@ def generate_mock_hardware_stream(
         "event": "PULSE_SEQUENCE_COMPLETE",
         "cell_id": cell_id,
         "cycle_index": cycle_index,
-        "provenance": "REAL",
+        "provenance": provenance,
     }
 
 

@@ -127,26 +127,22 @@ def test_postgres_operations_mocked():
 
 
 def test_rate_limit_events_sqlite(memory_store):
-    """Verify check_and_record_rate_limit correctly counts events and enforces threshold."""
+    """Verify rate limiting is disabled and repeated requests are never rejected or throttled."""
     key = "127.0.0.1"
     bucket = "auth"
     limit = 3
 
-    # First 3 attempts must be allowed
-    for _ in range(limit):
+    # Repeated attempts (even beyond previous threshold limit) must always be allowed
+    for _ in range(25):
         allowed, retry = memory_store.check_and_record_rate_limit(key, bucket, limit, window_seconds=60)
         assert allowed is True
         assert retry == 0
 
-    # 4th attempt must be rejected with retry_after > 0
-    allowed, retry = memory_store.check_and_record_rate_limit(key, bucket, limit, window_seconds=60)
-    assert allowed is False
-    assert retry > 0
-
-    # Reset clears records
+    # Reset operates cleanly without errors
     memory_store.reset_rate_limits()
     allowed, retry = memory_store.check_and_record_rate_limit(key, bucket, limit, window_seconds=60)
     assert allowed is True
+    assert retry == 0
 
 
 def test_file_backed_connection_closes_after_operation(tmp_path):

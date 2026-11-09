@@ -61,7 +61,7 @@ class Settings(BaseModel):
     OPERATOR_USERNAME: str = Field(default_factory=lambda: os.getenv("OPERATOR_USERNAME", "operator"))
     OPERATOR_PASSWORD_HASH: str = Field(default_factory=lambda: os.getenv("OPERATOR_PASSWORD_HASH", DEFAULT_DEV_OPERATOR_HASH))
     HARDWARE_API_KEY: str = Field(default_factory=lambda: os.getenv("HARDWARE_API_KEY", DEFAULT_DEV_HARDWARE_KEY))
-    RATE_LIMIT_ENABLED: bool = Field(default=True)
+    RATE_LIMIT_ENABLED: bool = Field(default=False)
     MAX_PAYLOAD_BYTES: int = Field(default=1024 * 1024)  # 1 MB
     DOCS_ENABLED: bool = Field(default_factory=lambda: os.getenv("DOCS_ENABLED", "true").lower() in ("true", "1", "yes"))
 

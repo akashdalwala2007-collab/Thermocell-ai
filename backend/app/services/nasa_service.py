@@ -457,3 +457,58 @@ def get_deterministic_nasa_benchmark_fixtures() -> Dict[str, List[NASACycleRecor
         cell_id: [replace(r, source="LITERATURE_BENCHMARK") for r in recs]
         for cell_id, recs in benchmarks.items()
     }
+
+
+def get_nasa_cycle_record(
+    cell_id: str,
+    cycle_index: Optional[int] = None,
+    profile_type: Optional[str] = None,
+) -> Optional[NASACycleRecord]:
+    """
+    Retrieve the empirical NASA benchmark cycle record for a physical cell.
+    
+    If cycle_index is specified:
+        Returns the exact matching NASACycleRecord if available,
+        or the closest cycle in the cell's benchmark sequence.
+    If cycle_index is None:
+        Maps profile_type ('nominal', 'marginal', 'degraded') to the cell's benchmark tier:
+        - 'nominal': cycle 1 (REUSE tier, first record)
+        - 'marginal': intermediate degraded cycle (INVESTIGATE tier)
+        - 'degraded': late degraded cycle (RETIRE tier)
+    """
+    try:
+        validated_id = validate_physical_cell_id(cell_id)
+    except ValueError:
+        return None
+
+    benchmarks = get_deterministic_nasa_benchmark_fixtures()
+    if validated_id not in benchmarks:
+        return None
+
+    records = benchmarks[validated_id]
+    if not records:
+        return None
+
+    if cycle_index is not None:
+        # Search for exact cycle match
+        for r in records:
+            if r.cycle_index == cycle_index:
+                return r
+        # Closest cycle match if exact cycle not in benchmark sample
+        return min(records, key=lambda r: abs(r.cycle_index - cycle_index))
+
+    # Map profile_type to the corresponding benchmark tier
+    p = (profile_type or "nominal").lower().strip()
+    if p == "marginal":
+        for r in records:
+            if r.triage_label == TriageClassEnum.INVESTIGATE:
+                return r
+        return records[min(2, len(records) - 1)]
+    elif p == "degraded":
+        for r in records:
+            if r.triage_label == TriageClassEnum.RETIRE:
+                return r
+        return records[-1]
+    else:  # 'nominal' or default
+        return records[0]
+
