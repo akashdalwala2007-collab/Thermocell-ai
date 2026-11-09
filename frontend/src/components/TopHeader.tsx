@@ -14,6 +14,7 @@ interface TopHeaderProps {
   isRunningDiagnostic: boolean;
   provenance: 'REAL' | 'SYNTHETIC' | 'PREDICTED';
   isHardwareMode: boolean;
+  isHardwareConnected?: boolean;
   onOpenLoginModal: () => void;
   isAuthenticated: boolean;
   operatorId?: string;
@@ -39,6 +40,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   isRunningDiagnostic,
   provenance,
   isHardwareMode,
+  isHardwareConnected = true,
   onOpenLoginModal,
   isAuthenticated,
   operatorId = 'OP-4482',
@@ -67,8 +69,20 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         <div className="hidden lg:flex items-center gap-2 shrink-0 pl-3 border-l border-[#142340]">
           <ProvenanceBadge provenance={provenance} size="sm" />
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#101a2e] font-mono text-[11px] text-slate-200 border border-[#142340]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#4cd7f6] animate-pulse"></span>
-            {isHardwareMode ? 'ESP32 HW ACTIVE' : 'ESP32 ONLINE'}
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isHardwareMode
+                  ? isHardwareConnected !== false
+                    ? 'bg-[#4cd7f6] animate-pulse'
+                    : 'bg-rose-500'
+                  : 'bg-[#06b6d4] animate-pulse'
+              }`}
+            ></span>
+            {isHardwareMode
+              ? isHardwareConnected !== false
+                ? 'ESP32 HW ACTIVE'
+                : 'ESP32 OFFLINE'
+              : 'SIMULATION MODE'}
           </span>
           <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#090e1a] font-mono text-[11px] text-slate-400 border border-[#142340]">
             {isRunningDiagnostic ? (

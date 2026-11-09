@@ -370,6 +370,7 @@ export const App: React.FC = () => {
         activeTab={activeTab}
         onSelectTab={(tab) => setActiveTab(tab)}
         isHardwareLinked={!isHardwareMode || true}
+        isHardwareMode={isHardwareMode}
       />
 
       {/* Main Content Wrap offset by Sidebar */}
@@ -439,6 +440,7 @@ export const App: React.FC = () => {
               isRunningDiagnostic={isLoading}
               onRunDiagnostic={() => executeDiagnosticRun(profile, cellId)}
               selectedCell={cellId}
+              isHardwareMode={isHardwareMode}
             />
           )}
 

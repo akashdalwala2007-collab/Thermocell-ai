@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BatteryPulseTelemetry } from '../services/api';
+import { ProvenanceBadge } from '../components/ProvenanceBadge';
 import { getThermalColor } from '../utils/thermalColors';
 
-interface LiveMonitoringViewProps {
+export interface LiveMonitoringViewProps {
   telemetry: BatteryPulseTelemetry | null;
   isRunningDiagnostic: boolean;
   onRunDiagnostic: () => void;
   selectedCell: string;
+  isHardwareMode?: boolean;
 }
 
 export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
@@ -14,92 +16,275 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
   isRunningDiagnostic,
   onRunDiagnostic,
   selectedCell,
+  isHardwareMode = false,
 }) => {
-  const [isLinkDropped, setIsLinkDropped] = useState<boolean>(false);
-  const [elapsedSec, setElapsedSec] = useState<number>(8.42);
+  // Fault simulation state for hardware mode ONLY
+  const [isHardwareLinkDropped, setIsHardwareLinkDropped] = useState<boolean>(false);
+  const [isStreamingPaused, setIsStreamingPaused] = useState<boolean>(false);
+  const [elapsedSec, setElapsedSec] = useState<number>(0.0);
   const [hoveredCoord, setHoveredCoord] = useState<{ r: number; c: number; temp: number } | null>(
     null
   );
 
-  // Oscillogram live clock increment effect when active
+  // When diagnostic run is triggered, reset clock to beginning of pulse
   useEffect(() => {
     if (isRunningDiagnostic) {
-      const interval = setInterval(() => {
-        setElapsedSec((prev) => (prev >= 12.0 ? 0.0 : prev + 0.1));
-      }, 100);
-      return () => clearInterval(interval);
+      setElapsedSec(0.0);
+      setIsStreamingPaused(false);
     }
   }, [isRunningDiagnostic]);
 
-  const hasTelemetry = telemetry !== null;
-  const cellId = telemetry?.cell_id ?? selectedCell;
-  const ocv = telemetry?.v_pre_pulse ?? null;
-  const vMeas = isLinkDropped
+  // Construct complete 120-frame pulse sequence (100 active @ 10Hz + 20 relaxation @ 10Hz)
+  const pulseData = useMemo(() => {
+    if (telemetry) {
+      const timestamps = [
+        ...telemetry.timestamps,
+        ...(telemetry.relaxation?.timestamps ?? Array.from({ length: 20 }, (_, i) => Number((10.0 + i * 0.1).toFixed(1)))),
+      ];
+      const voltage = [
+        ...telemetry.voltage,
+        ...(telemetry.relaxation?.voltage ?? Array.from({ length: 20 }, () => telemetry.voltage[telemetry.voltage.length - 1] ?? telemetry.v_pre_pulse)),
+      ];
+      const current = [
+        ...telemetry.current,
+        ...Array(telemetry.relaxation?.timestamps?.length ?? 20).fill(0.0),
+      ];
+      const bulkTemp = [
+        ...telemetry.bulk_temperature,
+        ...(telemetry.relaxation?.bulk_temperature ?? Array.from({ length: 20 }, () => telemetry.bulk_temperature[telemetry.bulk_temperature.length - 1] ?? 24.25)),
+      ];
+      const ocv = telemetry.v_pre_pulse;
+
+      return {
+        cellId: telemetry.cell_id,
+        ocv,
+        timestamps,
+        voltage,
+        current,
+        bulkTemp,
+        thermalFrames: telemetry.thermal_frames,
+      };
+    }
+
+    // Deterministic physics-grounded 1-RC ECM fallback when telemetry is awaiting ingestion
+    const ocv = 4.143;
+    const dcir = 0.091;
+    const pulseCurrent = 3.0;
+    const timestamps = Array.from({ length: 120 }, (_, i) => Math.round(i * 0.1 * 10) / 10);
+    const voltage = timestamps.map((t) => {
+      if (t < 10.0) {
+        return Number((ocv - pulseCurrent * dcir - 0.03 * (1.0 - Math.exp(-t / 1.5))).toFixed(4));
+      }
+      return Number((ocv - 0.02 * Math.exp(-(t - 10.0) / 1.5)).toFixed(4));
+    });
+    const current = timestamps.map((t) => (t < 10.0 ? pulseCurrent : 0.0));
+    const bulkTemp = timestamps.map((t) => {
+      if (t < 10.0) {
+        return Number((24.0 + 0.25 * (t / 10.0)).toFixed(2));
+      }
+      return Number((24.25 - 0.05 * ((t - 10.0) / 2.0)).toFixed(2));
+    });
+    const thermalFrames = Array.from({ length: 100 }, (_, i) => {
+      const t = i * 0.1;
+      const base = 24.0 + 0.25 * (t / 10.0);
+      return Array.from({ length: 8 }, (_, r) =>
+        Array.from({ length: 8 }, (_, c) => {
+          const tabRise = (r === 0 || r === 1) && (c === 3 || c === 4) ? 0.3 * (t / 10.0) : 0;
+          const hotspotRise = r === 1 && c === 4 ? 0.45 * (t / 10.0) : 0;
+          return Number((base + tabRise + hotspotRise + r * 0.03 + c * 0.02).toFixed(2));
+        })
+      );
+    });
+
+    return {
+      cellId: selectedCell,
+      ocv,
+      timestamps,
+      voltage,
+      current,
+      bulkTemp,
+      thermalFrames,
+    };
+  }, [telemetry, selectedCell]);
+
+  // Continuous 10 Hz live oscillogram ticker (100ms interval) across 12.0s pulse cycle
+  useEffect(() => {
+    if (isStreamingPaused) return;
+    if (isHardwareMode && isHardwareLinkDropped) return;
+
+    const interval = setInterval(() => {
+      setElapsedSec((prev) => {
+        const next = Math.round((prev + 0.1) * 10) / 10;
+        return next >= 12.0 ? 0.0 : next;
+      });
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [isStreamingPaused, isHardwareMode, isHardwareLinkDropped]);
+
+  // Frame calculation at current elapsedSec
+  const frameIdx = Math.min(119, Math.max(0, Math.floor(Math.round(elapsedSec * 10))));
+  const isLinkOffline = isHardwareMode && isHardwareLinkDropped;
+
+  const cellId = pulseData.cellId;
+  const ocv = pulseData.ocv;
+
+  const vMeas = isLinkOffline
     ? 0.0
-    : isRunningDiagnostic
-    ? 3.718
-    : hasTelemetry
-    ? telemetry.voltage[telemetry.voltage.length - 1] ?? ocv
-    : null;
-  const iMeas = isLinkDropped
+    : pulseData.voltage[frameIdx] ?? ocv;
+  const iMeas = isLinkOffline
     ? 0.0
-    : isRunningDiagnostic
-    ? 3.01
-    : hasTelemetry
-    ? telemetry.current[telemetry.current.length - 1] ?? 0.0
-    : null;
-  const tMeas = isLinkDropped
+    : pulseData.current[frameIdx] ?? 0.0;
+  const tMeas = isLinkOffline
     ? 0.0
-    : hasTelemetry
-    ? telemetry.bulk_temperature[telemetry.bulk_temperature.length - 1] ?? null
-    : null;
-  const rMeas = isLinkDropped
+    : pulseData.bulkTemp[frameIdx] ?? 24.0;
+  const rMeas = isLinkOffline
     ? 0.0
-    : ocv !== null && vMeas !== null && iMeas !== null && iMeas > 0
+    : ocv !== null && vMeas !== null && iMeas > 0.1
     ? ((ocv - vMeas) / iMeas) * 1000
     : null;
 
-  // Determine stage pill state
+  // Active stage determination
   const activeStage = useMemo(() => {
-    if (!isRunningDiagnostic) return 'IDLE';
-    if (elapsedSec < 1.0) return 'BASELINE';
-    if (elapsedSec <= 11.0) return 'ACTIVE_PULSE';
-    return 'RELAXATION';
-  }, [isRunningDiagnostic, elapsedSec]);
+    if (isLinkOffline) return 'FAULT';
+    if (elapsedSec < 0.2) return 'BASELINE';
+    if (elapsedSec < 10.0) return 'ACTIVE_PULSE';
+    if (elapsedSec <= 12.0) return 'RELAXATION';
+    return 'IDLE';
+  }, [isLinkOffline, elapsedSec]);
 
-  // Synthetic or real 8x8 matrix
-  const thermalGrid = useMemo(() => {
-    return Array.from({ length: 8 }, (_, r) =>
-      Array.from({ length: 8 }, (_, c) => {
-        let temp = 24.2 + r * 0.06 + c * 0.04;
-        if (r === 1 && c === 4) {
-          temp = 25.85; // Hotspot
-        } else if ((r === 0 || r === 1) && (c === 3 || c === 4)) {
-          temp += 1.25;
+  // 8x8 thermal matrix for active frame
+  const currentGrid = useMemo(() => {
+    if (isLinkOffline) {
+      return Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => 0));
+    }
+    const idx = Math.min(frameIdx, pulseData.thermalFrames.length - 1);
+    if (pulseData.thermalFrames[idx]) {
+      return pulseData.thermalFrames[idx];
+    }
+    return Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => 24.0));
+  }, [isLinkOffline, frameIdx, pulseData.thermalFrames]);
+
+  // Compute thermal bounds & hotspot coordinate dynamically
+  const { frameMin, frameMax, hotspotCoord } = useMemo(() => {
+    let min = 999;
+    let max = -999;
+    let hotR = 1;
+    let hotC = 4;
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const val = currentGrid[r]?.[c] ?? 0;
+        if (val < min) min = val;
+        if (val > max) {
+          max = val;
+          hotR = r;
+          hotC = c;
         }
-        return Number(temp.toFixed(2));
-      })
-    );
-  }, []);
+      }
+    }
+    return {
+      frameMin: min === 999 ? 24.0 : min,
+      frameMax: max === -999 ? 26.0 : max,
+      hotspotCoord: { r: hotR, c: hotC, temp: max === -999 ? 25.85 : max },
+    };
+  }, [currentGrid]);
 
   const progressPercent = Math.min(100, Math.max(0, (elapsedSec / 12.0) * 100));
 
+  // Oscilloscope geometric transforms (760 x 320 viewbox)
+  // Voltage channel: [3.60V, 4.20V] mapped to y = [150, 20]
+  // Current channel: [0.00A, 3.50A] mapped to y = [300, 190]
+  const { vPathFull, vPathElapsed, vAreaElapsed, iPathFull, iPathElapsed, cursorX, cursorYV, cursorYI } =
+    useMemo(() => {
+      const getX = (t: number) => (t / 12.0) * 760;
+      const getYV = (v: number) => {
+        const normalized = Math.max(0, Math.min(1, (v - 3.60) / 0.60));
+        return 150 - normalized * 130;
+      };
+      const getYI = (i: number) => {
+        const normalized = Math.max(0, Math.min(1, i / 3.50));
+        return 300 - normalized * 110;
+      };
+
+      const pointsV = pulseData.timestamps.map((t, idx) => ({
+        x: getX(t),
+        y: getYV(pulseData.voltage[idx] ?? ocv),
+      }));
+
+      const pointsI = pulseData.timestamps.map((t, idx) => ({
+        x: getX(t),
+        y: getYI(pulseData.current[idx] ?? 0.0),
+      }));
+
+      const vFull = pointsV.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+      const iFull = pointsI.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+
+      const elapsedPointsV = pointsV.slice(0, frameIdx + 1);
+      const elapsedPointsI = pointsI.slice(0, frameIdx + 1);
+
+      const curX = getX(elapsedSec);
+      const curYV = getYV(vMeas);
+      const curYI = getYI(iMeas);
+
+      // Add current cursor point
+      const vElapsed = [
+        ...elapsedPointsV.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`),
+        `L ${curX.toFixed(1)} ${curYV.toFixed(1)}`,
+      ].join(' ');
+
+      const vArea = [
+        `M 0 150`,
+        ...elapsedPointsV.map((p) => `L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`),
+        `L ${curX.toFixed(1)} ${curYV.toFixed(1)}`,
+        `L ${curX.toFixed(1)} 150 Z`,
+      ].join(' ');
+
+      const iElapsed = [
+        ...elapsedPointsI.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`),
+        `L ${curX.toFixed(1)} ${curYI.toFixed(1)}`,
+      ].join(' ');
+
+      return {
+        vPathFull: vFull,
+        vPathElapsed: vElapsed,
+        vAreaElapsed: vArea,
+        iPathFull: iFull,
+        iPathElapsed: iElapsed,
+        cursorX: curX,
+        cursorYV: curYV,
+        cursorYI: curYI,
+      };
+    }, [pulseData, elapsedSec, frameIdx, vMeas, iMeas, ocv]);
+
   return (
     <div className="flex flex-col w-full pb-12 space-y-4">
-      {/* TOP HARDWARE DAQ STATUS BAR */}
+      {/* TOP DAQ STATUS BAR */}
       <div className="w-full bg-[#08101e] px-4 py-3 rounded border border-[#142340] flex flex-wrap items-center justify-between gap-3 shadow-sm">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <span
               className={`w-2 h-2 rounded-full ${
-                isLinkDropped ? 'bg-rose-500' : 'bg-[#4cd7f6] animate-pulse'
+                isLinkOffline
+                  ? 'bg-rose-500'
+                  : isHardwareMode
+                  ? 'bg-[#4cd7f6] animate-pulse'
+                  : 'bg-[#06b6d4] animate-pulse'
               }`}
             ></span>
             <span className="font-mono text-xs font-bold text-slate-100">
-              {isLinkDropped ? 'LINK OFFLINE (SIMULATED)' : 'ESP32 DAQ (250 SPS)'}
+              {isHardwareMode
+                ? isLinkOffline
+                  ? 'LINK OFFLINE (UART DISCONNECTED)'
+                  : 'ESP32 DAQ (10 Hz)'
+                : 'SIMULATION DAQ (10 Hz)'}
             </span>
           </div>
-          <span className="font-mono text-[11px] text-slate-400">Jitter: ±0.08ms</span>
+
+          <ProvenanceBadge provenance={isHardwareMode ? 'REAL' : 'SYNTHETIC'} size="sm" />
+
+          <span className="font-mono text-[11px] text-slate-400">
+            {isHardwareMode ? 'Jitter: ±0.08ms' : 'Numerical Sync: ±0.01ms'}
+          </span>
           <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-[#090e1a] text-[#7bd0ff] border border-[#142340]">
             Cell: {cellId} (18650)
           </span>
@@ -137,21 +322,23 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
               className={`px-2 py-0.5 rounded ${
                 activeStage === 'IDLE'
                   ? 'bg-emerald-500 text-[#070c18] font-bold'
+                  : activeStage === 'FAULT'
+                  ? 'bg-rose-500 text-white font-bold'
                   : 'bg-[#090e1a] text-slate-400'
               }`}
             >
-              IDLE
+              {activeStage === 'FAULT' ? 'FAULT' : 'IDLE'}
             </span>
           </div>
         </div>
 
-        {/* Progress & Stream drop toggle button */}
+        {/* Progress & Stream Controls */}
         <div className="flex items-center gap-3">
           <div className="hidden sm:flex items-center gap-2 font-mono text-xs">
             <span className="text-slate-400">{elapsedSec.toFixed(2)}s / 12.0s</span>
             <div className="w-24 h-1.5 bg-[#15223c] rounded-full overflow-hidden">
               <div
-                className="h-full bg-[#4cd7f6] transition-all duration-200"
+                className="h-full bg-[#4cd7f6] transition-all duration-100"
                 style={{ width: `${progressPercent}%` }}
               ></div>
             </div>
@@ -167,43 +354,68 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
             <span>{isRunningDiagnostic ? 'TRIGGERED' : 'TRIGGER PULSE'}</span>
           </button>
 
-          <button
-            onClick={() => setIsLinkDropped(!isLinkDropped)}
-            type="button"
-            className={`px-3 py-1.5 rounded font-mono text-[11px] font-bold uppercase transition-all border flex items-center gap-1.5 ${
-              isLinkDropped
-                ? 'bg-rose-950/80 text-rose-300 border-rose-500 hover:bg-rose-900'
-                : 'bg-[#101a2e] text-slate-300 border-[#142340] hover:border-[#4cd7f6]'
-            }`}
-          >
-            <span className="material-symbols-outlined text-[16px] text-[#4cd7f6]">
-              {isLinkDropped ? 'play_circle' : 'pause_circle'}
-            </span>
-            <span>{isLinkDropped ? 'RESTORE LINK' : 'SIMULATE LINK DROP'}</span>
-          </button>
+          {isHardwareMode ? (
+            <button
+              onClick={() => setIsHardwareLinkDropped(!isHardwareLinkDropped)}
+              type="button"
+              className={`px-3 py-1.5 rounded font-mono text-[11px] font-bold uppercase transition-all border flex items-center gap-1.5 ${
+                isHardwareLinkDropped
+                  ? 'bg-rose-950/80 text-rose-300 border-rose-500 hover:bg-rose-900'
+                  : 'bg-[#101a2e] text-slate-300 border-[#142340] hover:border-[#4cd7f6]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px] text-[#4cd7f6]">
+                {isHardwareLinkDropped ? 'play_circle' : 'pause_circle'}
+              </span>
+              <span>{isHardwareLinkDropped ? 'RESTORE LINK' : 'SIMULATE LINK DROP'}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsStreamingPaused(!isStreamingPaused)}
+              type="button"
+              className={`px-3 py-1.5 rounded font-mono text-[11px] font-bold uppercase transition-all border flex items-center gap-1.5 ${
+                isStreamingPaused
+                  ? 'bg-cyan-950/80 text-cyan-300 border-cyan-500 hover:bg-cyan-900'
+                  : 'bg-[#101a2e] text-slate-300 border-[#142340] hover:border-[#4cd7f6]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px] text-[#4cd7f6]">
+                {isStreamingPaused ? 'play_arrow' : 'pause'}
+              </span>
+              <span>{isStreamingPaused ? 'RESUME STREAM' : 'PAUSE STREAM'}</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* STATUS BANNER */}
       <div
         className={`w-full px-4 py-2 rounded border flex items-center justify-between font-mono text-xs ${
-          isLinkDropped
+          isLinkOffline
             ? 'bg-rose-950/40 border-rose-500/50 text-rose-300'
             : 'bg-[#08101e] border-[#142340] text-slate-300'
         }`}
       >
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[#4cd7f6] text-[18px]">verified</span>
+          <span
+            className={`material-symbols-outlined text-[18px] ${
+              isLinkOffline ? 'text-rose-400' : 'text-[#4cd7f6]'
+            }`}
+          >
+            {isLinkOffline ? 'warning' : 'verified'}
+          </span>
           <span>
-            {isLinkDropped
-              ? 'WARNING: UART Serial Transport Interrupted. Synthetic fallback stream buffer engaged.'
-              : 'STREAM ACTIVE (250 SPS) — ESP32-S3 DMA Buffer Healthy (0 dropped frames, ring buffer fill: 14.8%)'}
+            {isHardwareMode
+              ? isLinkOffline
+                ? 'WARNING: UART Serial Transport Interrupted. Synthetic fallback stream buffer engaged.'
+                : 'STREAM ACTIVE (10 Hz) — ESP32 Hardware Stream Buffer Healthy (0 dropped frames, ring buffer fill: 14.8%)'
+              : 'STREAM ACTIVE (10 Hz) — Synthetic Telemetry Engine Healthy (100 active + 20 relaxation frames, provenance: SYNTHETIC)'}
           </span>
         </div>
         <div className="hidden md:flex items-center gap-3 text-slate-400">
-          <span>HW REV: v4.2-REV-B</span>
+          <span>{isHardwareMode ? 'HW REV: v4.2-REV-B' : 'ENGINE: 1-RC ECM + THERMAL'}</span>
           <span className="px-2 py-0.5 rounded bg-[#101a2e] text-[#7bd0ff] text-[10px]">
-            BURST_MODE_ENABLED
+            {isHardwareMode ? 'BURST_MODE_ENABLED' : 'SYNTHETIC_MODE_ACTIVE'}
           </span>
         </div>
       </div>
@@ -221,7 +433,8 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   Terminal Voltage V(t)
                 </span>
                 <span className="inline-flex items-center gap-1 font-mono text-[10px] text-rose-400 bg-rose-950/60 px-1.5 py-0.5 rounded">
-                  <span className="material-symbols-outlined text-[12px]">south</span> -0.364 V ΔV
+                  <span className="material-symbols-outlined text-[12px]">south</span>
+                  {ocv !== null && vMeas !== null ? `${(vMeas - ocv).toFixed(3)} V ΔV` : '—'}
                 </span>
               </div>
               <div className="flex items-baseline gap-1.5 my-1">
@@ -243,7 +456,8 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   Galvanostatic Current I(t)
                 </span>
                 <span className="inline-flex items-center gap-1 font-mono text-[10px] text-[#4cd7f6] bg-[#06b6d4]/20 px-1.5 py-0.5 rounded border border-[#06b6d4]/40">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#4cd7f6]"></span> TARGET LOCKED
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#4cd7f6]"></span>
+                  {iMeas !== null && iMeas > 0.1 ? 'TARGET LOCKED' : 'UNLOADED (RELAXATION)'}
                 </span>
               </div>
               <div className="flex items-baseline gap-1.5 my-1">
@@ -254,7 +468,9 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-[#142340] mt-2 font-mono text-[11px]">
                 <span className="text-slate-400">TOL: ±0.05 A</span>
-                <span className="text-[#7bd0ff]">{iMeas !== null ? '+0.01A DEV' : '—'}</span>
+                <span className="text-[#7bd0ff]">
+                  {iMeas !== null && iMeas > 0.1 ? '+0.01A DEV' : '0.00A REST'}
+                </span>
               </div>
             </div>
 
@@ -265,7 +481,10 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   Instantaneous Temp T_core
                 </span>
                 <span className="inline-flex items-center gap-1 font-mono text-[10px] text-[#7bd0ff] bg-[#101a2e] px-1.5 py-0.5 rounded border border-[#142340]">
-                  <span className="material-symbols-outlined text-[12px]">north</span> {tMeas !== null ? '+1.62 °C RISE' : '—'}
+                  <span className="material-symbols-outlined text-[12px]">north</span>
+                  {tMeas !== null
+                    ? `+${Math.max(0, tMeas - (pulseData.bulkTemp[0] ?? 24.0)).toFixed(2)} °C RISE`
+                    : '—'}
                 </span>
               </div>
               <div className="flex items-baseline gap-1.5 my-1">
@@ -275,8 +494,14 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                 <span className="font-mono text-base text-amber-400 font-semibold">°C</span>
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-[#142340] mt-2 font-mono text-[11px]">
-                <span className="text-slate-400">BASELINE: {tMeas !== null ? '24.20 °C' : '—'}</span>
-                <span className="text-slate-300">RATE: {tMeas !== null ? '+0.16 °C/s' : '—'}</span>
+                <span className="text-slate-400">
+                  BASELINE: {pulseData.bulkTemp[0] ? `${pulseData.bulkTemp[0].toFixed(2)} °C` : '24.00 °C'}
+                </span>
+                <span className="text-slate-300">
+                  RATE: {elapsedSec > 0 && tMeas !== null
+                    ? `+${((tMeas - (pulseData.bulkTemp[0] ?? 24.0)) / Math.max(0.1, elapsedSec)).toFixed(2)} °C/s`
+                    : '+0.00 °C/s'}
+                </span>
               </div>
             </div>
 
@@ -287,18 +512,26 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   Dynamic Impedance R_Ohm
                 </span>
                 <span className="inline-flex items-center gap-1 font-mono text-[10px] text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                  NOMINAL HEADROOM
+                  {iMeas !== null && iMeas > 0.1 ? 'NOMINAL HEADROOM' : 'RELAXATION DCIR'}
                 </span>
               </div>
               <div className="flex items-baseline gap-1.5 my-1">
                 <span className="font-mono text-3xl font-bold text-slate-100">
-                  {rMeas !== null ? rMeas.toFixed(1) : '—'}
+                  {rMeas !== null
+                    ? rMeas.toFixed(1)
+                    : ocv !== null && pulseData.voltage[99]
+                    ? (((ocv - pulseData.voltage[99]) / 3.0) * 1000).toFixed(1)
+                    : '—'}
                 </span>
                 <span className="font-mono text-base text-[#4cd7f6] font-semibold">mΩ</span>
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-[#142340] mt-2 font-mono text-[11px]">
                 <span className="text-slate-400">LIMIT: ≤ 117.0 mΩ</span>
-                <span className="text-[#4cd7f6]">+27.6 mΩ MARGIN</span>
+                <span className="text-[#4cd7f6]">
+                  {rMeas !== null
+                    ? `+${Math.max(0, 117.0 - rMeas).toFixed(1)} mΩ MARGIN`
+                    : '+27.6 mΩ MARGIN'}
+                </span>
               </div>
             </div>
           </div>
@@ -323,7 +556,7 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   <span className="w-2.5 h-0.5 bg-[#93ccff] inline-block"></span> I(t) [A]
                 </span>
                 <span className="px-1.5 py-0.5 rounded bg-[#101a2e] text-slate-300 border border-[#142340]">
-                  500 ms/div
+                  100 ms/div
                 </span>
               </div>
             </div>
@@ -358,57 +591,83 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   CH 02 : DISCHARGE CURRENT I(t) [0.00A - 3.50A]
                 </text>
 
-                {/* Upper Trace: V(t) */}
+                {/* Preview / Faint full traces */}
                 <path
-                  d="M 0 28 L 63.3 28 L 63.3 74 C 180 82, 380 88, 533 90"
+                  d={vPathFull}
+                  fill="none"
+                  stroke="#4cd7f6"
+                  strokeWidth="1.2"
+                  strokeDasharray="3,3"
+                  opacity="0.35"
+                />
+                <path
+                  d={iPathFull}
+                  fill="none"
+                  stroke="#93ccff"
+                  strokeWidth="1.2"
+                  strokeDasharray="3,3"
+                  opacity="0.35"
+                />
+
+                {/* Active Elapsed Area Glow */}
+                <path d={vAreaElapsed} fill="url(#scopeVGlow)" />
+
+                {/* Active Elapsed Lines */}
+                <path
+                  d={vPathElapsed}
                   fill="none"
                   stroke="#4cd7f6"
                   strokeWidth="2.5"
                   strokeLinecap="round"
                 />
                 <path
-                  d="M 0 28 L 63.3 28 L 63.3 74 C 180 82, 380 88, 533 90 L 533 160 L 0 160 Z"
-                  fill="url(#scopeVGlow)"
-                />
-                <path
-                  d="M 533 90 C 620 93, 696 95, 696.6 96 L 696.6 42 L 760 40"
-                  fill="none"
-                  stroke="#4cd7f6"
-                  strokeWidth="1.5"
-                  strokeDasharray="3,3"
-                  opacity="0.6"
-                />
-
-                {/* Lower Trace: I(t) */}
-                <path
-                  d="M 0 298 L 63.3 298 L 63.3 200 L 533 200"
+                  d={iPathElapsed}
                   fill="none"
                   stroke="#93ccff"
-                  strokeWidth="2"
+                  strokeWidth="2.0"
                   strokeLinecap="round"
                 />
-                <path
-                  d="M 533 200 L 696.6 200 L 696.6 298 L 760 298"
-                  fill="none"
-                  stroke="#93ccff"
-                  strokeWidth="1.5"
-                  strokeDasharray="3,3"
-                  opacity="0.6"
-                />
 
-                {/* Callout Ohmic Drop */}
-                <circle cx="63.3" cy="74" r="3" fill="#4cd7f6" />
-                <text x="70" y="65" fill="#acedff" fontFamily="JetBrains Mono" fontSize="9">
-                  ΔV_ohmic = 298mV
-                </text>
+                {/* Ohmic Drop Callout */}
+                {pulseData.voltage[0] && ocv && (
+                  <>
+                    <circle cx="6.3" cy={cursorYV} r="3" fill="#4cd7f6" />
+                    <text x="14" y="65" fill="#acedff" fontFamily="JetBrains Mono" fontSize="9">
+                      ΔV_ohmic = {Math.round((ocv - pulseData.voltage[0]) * 1000)}mV
+                    </text>
+                  </>
+                )}
 
-                {/* Live time cursor at t=8.42s (x=533.2) */}
+                {/* Live Time Cursor */}
                 <g id="liveTimeCursor">
-                  <line x1="533.2" y1="0" x2="533.2" y2="320" stroke="#06b6d4" strokeWidth="1.5" strokeDasharray="3,2" />
-                  <circle cx="533.2" cy="90" r="4.5" fill="#06b6d4" stroke="#090e1a" strokeWidth="2" />
-                  <circle cx="533.2" cy="200" r="4.5" fill="#93ccff" stroke="#090e1a" strokeWidth="2" />
-                  <rect x="503" y="4" width="60" height="16" rx="2" fill="#06b6d4" />
-                  <text x="533" y="16" fill="#001f26" fontFamily="JetBrains Mono" fontSize="9" fontWeight="bold" textAnchor="middle">
+                  <line
+                    x1={cursorX}
+                    y1="0"
+                    x2={cursorX}
+                    y2="320"
+                    stroke="#06b6d4"
+                    strokeWidth="1.5"
+                    strokeDasharray="3,2"
+                  />
+                  <circle cx={cursorX} cy={cursorYV} r="4.5" fill="#06b6d4" stroke="#090e1a" strokeWidth="2" />
+                  <circle cx={cursorX} cy={cursorYI} r="4.5" fill="#93ccff" stroke="#090e1a" strokeWidth="2" />
+                  <rect
+                    x={Math.min(695, Math.max(5, cursorX - 30))}
+                    y="4"
+                    width="60"
+                    height="16"
+                    rx="2"
+                    fill="#06b6d4"
+                  />
+                  <text
+                    x={Math.min(725, Math.max(35, cursorX))}
+                    y="16"
+                    fill="#001f26"
+                    fontFamily="JetBrains Mono"
+                    fontSize="9"
+                    fontWeight="bold"
+                    textAnchor="middle"
+                  >
                     t = {elapsedSec.toFixed(2)}s
                   </text>
                 </g>
@@ -420,7 +679,7 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   <text x="253" y="314">4.0s</text>
                   <text x="380" y="314">6.0s</text>
                   <text x="507" y="314">8.0s</text>
-                  <text x="633" y="314">10.0s (PULSE END)</text>
+                  <text x="625" y="314">10.0s (PULSE END)</text>
                   <text x="724" y="314">12.0s</text>
                 </g>
               </svg>
@@ -436,25 +695,31 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                 <div className="flex items-center justify-between gap-4">
                   <span className="text-slate-400">I_MEAS:</span>
                   <span className="text-[#93ccff] font-bold">
-                    {iMeas !== null ? `${iMeas.toFixed(4)} A` : '—'}
+                    {iMeas !== null ? `${iMeas.toFixed(3)} A` : '—'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-slate-400">T_CORE:</span>
+                  <span className="text-amber-400 font-bold">
+                    {tMeas !== null ? `${tMeas.toFixed(2)} °C` : '—'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-4">
                   <span className="text-slate-400">SAMPLING:</span>
-                  <span className="text-[#7bd0ff]">4.00 ms (250 Hz)</span>
+                  <span className="text-[#7bd0ff]">10.0 Hz (100 ms)</span>
                 </div>
               </div>
             </div>
 
             <div className="flex items-center justify-between px-1 text-slate-400 font-mono text-xs">
-              <span>Profile: ISO-12405 Hybrid Disch.</span>
-              <span>Galvanostatic Slew Rate: 120 A/ms</span>
-              <span>ADC Quantization: 16-Bit Sigma-Delta</span>
+              <span>Profile: 10s Active + 2s Relaxation</span>
+              <span>Controlled Discharge: 3.00 A Galvanostatic</span>
+              <span>Model: 1-RC ECM + Thermodynamic</span>
             </div>
           </div>
         </div>
 
-        {/* RIGHT COLUMN: AMG8833 Thermal Array & Packet Diagnostics */}
+        {/* RIGHT COLUMN: AMG8833 Thermal Array & Buffer Monitor */}
         <div className="lg:col-span-5 flex flex-col space-y-4">
           {/* AMG8833 8x8 THERMAL INFRARED MATRIX */}
           <div className="bg-[#08101e] rounded p-4 border border-[#142340] flex flex-col space-y-3 shadow-sm">
@@ -482,18 +747,18 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                 <span className="text-amber-400 font-bold">
                   {hoveredCoord
                     ? `[R${hoveredCoord.r}, C${hoveredCoord.c}]: ${hoveredCoord.temp.toFixed(2)}°C`
-                    : '[R1, C4]: 25.85°C (HOTSPOT)'}
+                    : `[R${hotspotCoord.r}, C${hotspotCoord.c}]: ${hotspotCoord.temp.toFixed(2)}°C (HOTSPOT)`}
                 </span>
               </div>
 
               {/* 8x8 Grid */}
               <div className="relative p-2 bg-[#060a14] rounded border border-[#142340]">
                 <div className="grid grid-cols-8 gap-1.5 select-none">
-                  {thermalGrid.map((row, r) =>
+                  {currentGrid.map((row, r) =>
                     row.map((val, c) => {
-                      const isHotspot = r === 1 && c === 4;
+                      const isHotspot = r === hotspotCoord.r && c === hotspotCoord.c;
                       const isTab = (r === 0 || r === 1) && (c === 3 || c === 4);
-                      const color = getThermalColor(val, 24.0, 26.0);
+                      const color = getThermalColor(val, frameMin, frameMax);
 
                       return (
                         <div
@@ -529,39 +794,85 @@ export const LiveMonitoringView: React.FC<LiveMonitoringViewProps> = ({
                   }}
                 ></div>
                 <div className="flex justify-between font-mono text-[10px] text-slate-400 mt-1">
-                  <span>24.20 °C</span>
+                  <span>{frameMin.toFixed(2)} °C</span>
                   <span>Spatial Range</span>
-                  <span className="text-amber-400 font-semibold">25.85 °C</span>
+                  <span className="text-amber-400 font-semibold">{frameMax.toFixed(2)} °C</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* HARDWARE PACKET & BUFFER INTEGRITY MONITOR */}
+          {/* TELEMETRY BUFFER INTEGRITY MONITOR */}
           <div className="bg-[#08101e] rounded p-4 border border-[#142340] flex flex-col space-y-3 shadow-sm">
             <div className="flex items-center justify-between">
               <span className="font-semibold text-sm text-slate-100">
-                Hardware Packet &amp; Transport Buffer
+                {isHardwareMode ? 'Hardware Packet & Transport Buffer' : 'Simulation Engine & Telemetry Buffer'}
               </span>
-              <span className="font-mono text-[10px] text-emerald-400">DMA 100% HEALTHY</span>
+              <span
+                className={`font-mono text-[10px] ${
+                  isLinkOffline ? 'text-rose-400' : 'text-emerald-400'
+                }`}
+              >
+                {isHardwareMode
+                  ? isLinkOffline
+                    ? 'UART LINK DISCONNECTED'
+                    : 'DMA 100% HEALTHY'
+                  : 'SYNTHETIC STREAM ACTIVE'}
+              </span>
             </div>
 
             <div className="space-y-1.5 font-mono text-xs">
               <div className="p-2 rounded bg-[#060a14] border border-[#0f1a30] flex items-center justify-between">
-                <span className="text-slate-400">DMA Ring Buffer Fill</span>
-                <span className="text-[#4cd7f6] font-semibold">14.8% (Normal)</span>
+                <span className="text-slate-400">
+                  {isHardwareMode ? 'DMA Ring Buffer Fill' : 'Frame Buffer Synthesis'}
+                </span>
+                <span className="text-[#4cd7f6] font-semibold">
+                  {isHardwareMode
+                    ? isLinkOffline
+                      ? '0.0% (Empty)'
+                      : '14.8% (Normal)'
+                    : '100% (120/120 frames)'}
+                </span>
               </div>
               <div className="p-2 rounded bg-[#060a14] border border-[#0f1a30] flex items-center justify-between">
-                <span className="text-slate-400">Serial Ingestion Throughput</span>
-                <span className="text-slate-200">250 pkts/sec • 115200 baud</span>
+                <span className="text-slate-400">
+                  {isHardwareMode ? 'Serial Ingestion Throughput' : 'Numerical Sampling Rate'}
+                </span>
+                <span className="text-slate-200">
+                  {isHardwareMode
+                    ? isLinkOffline
+                      ? '0 pkts/sec (Halted)'
+                      : '100 pkts/sec • 115200 baud'
+                    : '10.0 Hz (100 ms step)'}
+                </span>
               </div>
               <div className="p-2 rounded bg-[#060a14] border border-[#0f1a30] flex items-center justify-between">
-                <span className="text-slate-400">Sensor Bus Architecture</span>
-                <span className="text-slate-200">I2C FastMode+ @ 1MHz</span>
+                <span className="text-slate-400">
+                  {isHardwareMode ? 'Sensor Bus Architecture' : 'Thermal Generator Model'}
+                </span>
+                <span className="text-slate-200">
+                  {isHardwareMode
+                    ? isLinkOffline
+                      ? 'Bus Tri-Stated'
+                      : 'I2C FastMode+ @ 1MHz'
+                    : 'Physics-Informed AMG8833'}
+                </span>
               </div>
               <div className="p-2 rounded bg-[#060a14] border border-[#0f1a30] flex items-center justify-between">
-                <span className="text-slate-400">CRC Packet Checksum</span>
-                <span className="text-emerald-400 font-semibold">PASS (0 Corruptions)</span>
+                <span className="text-slate-400">
+                  {isHardwareMode ? 'CRC Packet Checksum' : 'Data Provenance Tag'}
+                </span>
+                <span
+                  className={`font-semibold ${
+                    isLinkOffline ? 'text-rose-400' : 'text-emerald-400'
+                  }`}
+                >
+                  {isHardwareMode
+                    ? isLinkOffline
+                      ? 'TIMEOUT (No Packets)'
+                      : 'PASS (0 Corruptions)'
+                    : 'SYNTHETIC (Verified)'}
+                </span>
               </div>
             </div>
           </div>

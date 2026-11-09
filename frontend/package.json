@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test tests/thermal_grid.test.ts tests/cell_selection.test.ts"
+    "test": "node --experimental-strip-types --test tests/thermal_grid.test.ts tests/cell_selection.test.ts tests/simulation_mode.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

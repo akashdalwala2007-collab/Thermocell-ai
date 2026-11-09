@@ -13,12 +13,14 @@ interface SidebarProps {
   activeTab: NavTab;
   onSelectTab: (tab: NavTab) => void;
   isHardwareLinked?: boolean;
+  isHardwareMode?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   onSelectTab,
   isHardwareLinked = true,
+  isHardwareMode = false,
 }) => {
   const navItems: { id: NavTab; label: string; icon: string }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'speed' },
@@ -95,11 +97,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="mt-1 flex flex-col gap-1 text-[11px] font-mono">
             <div className="flex items-center justify-between text-slate-400">
               <span className="text-[10px] uppercase">Interface:</span>
-              <span className="text-slate-200 font-semibold">ESP32-S3 HW</span>
+              <span className="text-slate-200 font-semibold">{isHardwareMode ? 'ESP32-S3 HW' : 'SIMULATION'}</span>
             </div>
             <div className="flex items-center justify-between text-slate-400">
-              <span className="text-[10px] uppercase">Baud Rate:</span>
-              <span className="text-slate-200">115200</span>
+              <span className="text-[10px] uppercase">{isHardwareMode ? 'Baud Rate:' : 'Sampling:'}</span>
+              <span className="text-slate-200">{isHardwareMode ? '115200' : '10.0 Hz'}</span>
             </div>
             <div className="flex items-center justify-between text-slate-400">
               <span className="text-[10px] uppercase">Profile:</span>
@@ -116,7 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className={`w-2.5 h-2.5 rounded-full ${
               isHardwareLinked ? 'bg-[#4cd7f6] animate-pulse' : 'bg-amber-400'
             }`}
-            title="ESP32-S3 Link Active"
+            title={isHardwareMode ? 'ESP32-S3 Link Active' : 'Simulation Stream Active'}
           ></span>
         </div>
       </div>
