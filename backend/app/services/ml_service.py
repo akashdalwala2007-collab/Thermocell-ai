@@ -40,7 +40,7 @@ FEATURE_COLS_MODEL_2 = [
     "τ_cool",
 ]
 
-DEFAULT_MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "ml", "saved_models")
+DEFAULT_MODEL_DIR = os.getenv("MODEL_DIR") or os.path.join(os.path.dirname(__file__), "..", "..", "..", "ml", "saved_models")
 
 _health_model = None
 _pattern_model = None

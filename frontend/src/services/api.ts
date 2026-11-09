@@ -85,8 +85,12 @@ export interface HardwareBuildPulseRequest {
   cycle_index?: number | null;
 }
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+const rawBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const API_BASE_URL = rawBaseUrl
+  ? rawBaseUrl.replace(/\/+$/, '')
+  : (import.meta.env.PROD
+      ? 'https://thermocell-ai.onrender.com'
+      : 'http://127.0.0.1:8000');
 const TOKEN_KEY = 'thermocell_operator_token';
 
 type AuthListener = (auth: boolean) => void;

@@ -60,6 +60,8 @@ class Settings(BaseModel):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
     OPERATOR_USERNAME: str = Field(default_factory=lambda: os.getenv("OPERATOR_USERNAME", "operator"))
     OPERATOR_PASSWORD_HASH: str = Field(default_factory=lambda: os.getenv("OPERATOR_PASSWORD_HASH", DEFAULT_DEV_OPERATOR_HASH))
+    EVALUATOR_USERNAME: str = Field(default_factory=lambda: os.getenv("EVALUATOR_USERNAME", "evaluator"))
+    EVALUATOR_PASSWORD_HASH: str = Field(default_factory=lambda: os.getenv("EVALUATOR_PASSWORD_HASH", "$2b$12$MYcviB3LuQwi.3UfVntWoO3EpTB8/6sTIT0oJIRYJJqnGkmoNjDFq"))
     HARDWARE_API_KEY: str = Field(default_factory=lambda: os.getenv("HARDWARE_API_KEY", DEFAULT_DEV_HARDWARE_KEY))
     RATE_LIMIT_ENABLED: bool = Field(default=False)
     MAX_PAYLOAD_BYTES: int = Field(default=1024 * 1024)  # 1 MB
@@ -131,7 +133,8 @@ class Settings(BaseModel):
                 raise ValueError("HARDWARE_API_KEY cannot use default fallback in production mode.")
             if self.OPERATOR_PASSWORD_HASH == DEFAULT_DEV_OPERATOR_HASH or not self.OPERATOR_PASSWORD_HASH:
                 raise ValueError("OPERATOR_PASSWORD_HASH cannot use default fallback in production mode.")
-            self.DOCS_ENABLED = False
+            if "DOCS_ENABLED" not in os.environ:
+                self.DOCS_ENABLED = False
         return self
 
 
