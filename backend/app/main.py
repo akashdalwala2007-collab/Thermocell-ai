@@ -44,9 +44,9 @@ app = FastAPI(
     title=settings.API_TITLE,
     description="Physics-informed second-life battery grading and triage diagnostics API",
     version=settings.API_VERSION,
-    docs_url="/docs" if settings.DOCS_ENABLED else None,
-    redoc_url="/redoc" if settings.DOCS_ENABLED else None,
-    openapi_url="/openapi.json" if settings.DOCS_ENABLED else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
     lifespan=lifespan,
 )
 
